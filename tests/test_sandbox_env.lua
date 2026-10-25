@@ -129,6 +129,34 @@ local PROXIED_ROUTES = {
     { "SamplePlayer", "getSample", "Sample" },
 }
 
+-- Known independently of AUDIT (from the docs and the firmware's method
+-- tables): the methods that take a function the firmware calls, and at which
+-- argument. setBackgroundDrawingCallback is ignored by the firmware (it stores
+-- nothing and never calls it).
+local CALLBACK_METHODS = {
+    setFinishCallback = 1, setLoopCallback = 1, extractAll = 2,
+    setRequestCallback = 1, setHeadersReadCallback = 1, setRequestCompleteCallback = 1,
+    setConnectionClosedCallback = 1, setConnectCallback = 1, setReadCallback = 1, setCloseCallback = 1,
+}
+local INERT_CALLBACKS = { setBackgroundDrawingCallback = true }
+
+local function isCallbackParam(p)
+    return p == "fn" or p == "callback" or p:find("_fn$") ~= nil or p:find("[Cc]allback$") ~= nil
+end
+
+-- Each proxied type and the firmware method table it mirrors.
+local FIRMWARE_TYPES = {
+    Sample = { "lua_bridge_sound.c", "sound_sample_methods" },
+    SamplePlayer = { "lua_bridge_sound.c", "sound_player_methods" },
+    FilePlayer = { "lua_bridge_sound.c", "sound_fileplayer_methods" },
+    MP3Player = { "lua_bridge_sound.c", "sound_mp3player_methods" },
+    ModPlayer = { "lua_bridge_mod.c", "modplayer_methods" },
+    ZipArchive = { "lua_bridge_zip.c", "archive_methods" },
+    HttpConnection = { "lua_bridge_network.c", "l_http_methods" },
+    TcpSocket = { "lua_bridge_tcp.c", "l_tcp_methods" },
+    Framebuffer = { "lua_bridge_display.c", "l_fb_methods" },
+}
+
 -- `src`/`dst` are paths in module functions (fs.copy, fs.rename); in a
 -- method they are objects (grid:blit(src, ...)).
 local function isPathParam(p, method)
@@ -291,13 +319,14 @@ return {
         local r = mk()
         local ok, e = pcall(r.env.picocalc.sys.exit)
         T.eq(ok, false)
-        T.ok(rawequal(e, Sandbox.STOP))
+        T.ok(rawequal(e, r.STOP))
         ok, e = pcall(run, r, "local function f() picocalc.sys.exit() end f()")
         T.eq(ok, false)
-        T.ok(rawequal(e, Sandbox.STOP), "from a nested call")
+        T.ok(rawequal(e, r.STOP), "from a nested call")
         T.ok(r.exited)
-        T.eq(getmetatable(Sandbox.STOP), false)
-        T.eq(type(Sandbox.STOP), "table")
+        T.eq(getmetatable(r.STOP), false)
+        T.eq(type(r.STOP), "table")
+        T.ok(not rawequal(mk().STOP, r.STOP), "each run has its own")
     end,
 
     fs_confined = function()
@@ -733,12 +762,19 @@ return {
         T.same((function() local ks = {} for k in pairs(r.tracked) do ks[#ks + 1] = k end table.sort(ks) return ks end)(),
             { "file", "font", "http", "menu", "sound", "tcp" })
         local conn = pc.network.http.new("example.com", 443, true)
-        T.ok(contains(r.tracked.http, conn))
-        local fn = function() end
+        T.ok(contains(r.tracked.http, F.made[#F.made]), "the real connection is tracked")
+        T.eq(getmetatable(conn), false, "the program gets a proxy")
+        local called = 0
+        local fn = function() called = called + 1 end
         pc.sys.addMenuItem("Mine", fn)
-        T.eq(F.menu.Mine, fn)
         T.eq(r.tracked.menu[1].label, "Mine")
         T.eq(r.tracked.menu[1].fn, fn)
+        -- the firmware holds the program's function behind the gate
+        F.menu.Mine()
+        T.eq(called, 1)
+        r.over = true
+        F.menu.Mine()
+        T.eq(called, 1, "the item runs no program code once the program is over")
     end,
 
     menu_clear_keeps_app_items = function()
@@ -774,7 +810,7 @@ return {
     audit_well_formed = function()
         local KINDS = { font = true, file = true, http = true, tcp = true, menu = true, sound = true }
         local FIELDS = { path = true, track = true, reset = true, wrap = true, harmless = true, const = true,
-                         deny = true, ret = true, unwrap = true, raises = true }
+                         deny = true, ret = true, unwrap = true, raises = true, callback = true }
         for mod, fns in pairs(AUDIT) do
             T.ok(mod:match("^[%a][%w]*[%w.]*$"), "module name " .. mod)
             for name, e in pairs(fns) do
@@ -790,7 +826,7 @@ return {
                 if e.ret then T.ok(AUDIT[e.ret] and isType(e.ret), label .. " ret " .. e.ret) end
                 if e.wrap then T.ok(Sandbox.WRAPS[e.wrap], label .. " wrap " .. e.wrap) end
                 if e.reset then T.ok(Sandbox.RESETS[e.reset], label .. " reset " .. e.reset) end
-                for _, f in ipairs({ "path", "unwrap" }) do
+                for _, f in ipairs({ "path", "unwrap", "callback" }) do
                     if e[f] then
                         T.ok(#e[f] > 0, label)
                         for _, i in ipairs(e[f]) do T.eq(math.type(i), "integer", label) end
@@ -865,6 +901,91 @@ return {
                 local e = AUDIT[kind] and AUDIT[kind][meth]
                 T.ok(e and e.path and e.path[1] == slot, kind .. ":" .. meth .. " path " .. slot)
             end
+        end
+    end,
+
+    -- Every documented parameter that is a function the firmware calls is
+    -- declared a callback (wrapped behind the run-over gate), or the call is
+    -- denied, in the documented position; and every callback setter in AUDIT
+    -- declares its callback.
+    callback_params_declared = function()
+        for mod, fns in pairs(AUDIT) do
+            for name, e in pairs(fns) do
+                if name:match("^set%w*Callback$") then
+                    T.ok(e.deny or (e.callback and e.callback[1] == 1), mod .. "." .. name .. " callback 1")
+                end
+            end
+        end
+        for meth, slot in pairs(CALLBACK_METHODS) do
+            local seen = 0
+            for kind, ms in pairs(AUDIT) do
+                local e = isType(kind) and ms[meth]
+                if e then
+                    seen = seen + 1
+                    T.ok(e.callback and e.callback[1] == slot, kind .. ":" .. meth .. " callback " .. slot)
+                end
+            end
+            T.ok(seen > 0, meth .. " is on no proxied type")
+        end
+        local headings = docHeadings()
+        if not headings then return end
+        local bad, found, methods = {}, 0, 0
+        for _, h in ipairs(headings) do
+            for span in h.line:gmatch("`([^`]*)`") do
+                local name, plist = span:match("^picocalc%.([%w_%.]+)%((.-)%)$")
+                if name then
+                    local mod, fn = name:match("^(.*)%.([^.]+)$")
+                    local e = AUDIT[mod] and AUDIT[mod][fn]
+                    for i, p in ipairs(params(plist)) do
+                        if isCallbackParam(p) then
+                            found = found + 1
+                            local ok = e and (e.deny or (e.callback and (function()
+                                for _, j in ipairs(e.callback) do if j == i then return true end end
+                            end)()))
+                            if not ok then bad[#bad + 1] = name .. " arg " .. i .. " (" .. p .. ")" end
+                        end
+                    end
+                end
+                local recv, meth, mlist = span:match("^(%w+):(%w+)%((.-)%)$")
+                if recv then
+                    for i, p in ipairs(params(mlist)) do
+                        if isCallbackParam(p) then
+                            methods = methods + 1
+                            if CALLBACK_METHODS[meth] ~= i and not INERT_CALLBACKS[meth] then
+                                bad[#bad + 1] = recv .. ":" .. meth .. " arg " .. i .. " (" .. p .. ")"
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        T.ok(found >= 3, "only " .. found .. " callback parameters found")
+        T.ok(methods >= 10, "only " .. methods .. " callback-taking methods found")
+        T.ok(#bad == 0, "callback not declared:\n  " .. table.concat(bad, "\n  "))
+    end,
+
+    -- Each proxied type has exactly the methods of the firmware's method table
+    -- (a method AUDIT lacks would be missing; one the firmware lacks would be
+    -- a typo).
+    proxied_types_match_firmware = function()
+        local root = os.getenv("PICODECK_ROOT")
+        if not root or root == "" then return end
+        for kind, where in pairs(FIRMWARE_TYPES) do
+            local f = io.open(root .. "/src/os/" .. where[1])
+            T.ok(f, where[1])
+            local src = f:read("a")
+            f:close()
+            local body = src:match("luaL_Reg%s+" .. where[2] .. "%[%]%s*=%s*(%b{})")
+            T.ok(body, where[2] .. " not found")
+            local c, a = {}, {}
+            for m in body:gmatch('{%s*"([%w_]+)"') do c[m] = true end
+            for m in pairs(AUDIT[kind]) do a[m] = true end
+            T.ok(next(c), where[2] .. " is empty")
+            for m in pairs(c) do T.ok(a[m], kind .. ":" .. m .. " is in the firmware but not in AUDIT") end
+            for m in pairs(a) do T.ok(c[m], kind .. ":" .. m .. " is in AUDIT but not in the firmware") end
+        end
+        for kind in pairs(AUDIT) do
+            if isType(kind) then T.ok(FIRMWARE_TYPES[kind], kind .. " has no firmware table here") end
         end
     end,
 

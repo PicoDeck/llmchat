@@ -117,6 +117,19 @@ def test_error_screen_and_fix(llmchat):
     no_lua_errors(sim)
 
 
+def test_c_error_keeps_the_program_line(llmchat):
+    """A firmware function's error, raised through the run-over gate, still
+    names the program's line and the function (spec 9.2 step 5)."""
+    sim, api, data = launch(llmchat)
+    send(sim, "@prog-badarg")
+    m = mark(sim)
+    sim.keypress("f3")
+    wait(sim, r"\[run\] badarg\.lua error \d+ s: badarg\.lua:4: bad argument #3 to 'drawText' "
+              r"\(string expected, got nil\)", m)
+    wait(sim, r"\[app\] screen programError", m)
+    no_lua_errors(sim)
+
+
 def test_sys_exit_keeps_app(llmchat):
     """With OpenAI, so the program also arrives in a Responses stream."""
     sim, api, data = launch(llmchat, provider="openai")

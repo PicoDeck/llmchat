@@ -19,24 +19,28 @@
 --   run.appMenu   {label, fn} items of the app's own (Task 15's "Stop
 --                 program"): a program's sys.clearMenuItems() puts them back
 --   run.exited    true once the program called sys.exit()
+--   run.over      the run-over gate: false while the program runs, true from
+--                 the moment it is over (below)
+--   run.STOP      this run's own sentinel: sys.exit() and Stop program raise
+--                 it (a fresh table for every run)
 --   run.ok, run.err  the program's outcome, recorded by execute inside the
 --                 protected call
 -- Sandbox.execute(pc, run, src) -> {status, err, secs, printed}
 --                 compiles src as ctx.name in run.env, saves the font in
 --                 run.saved, clears both framebuffers, adds "Stop program",
---                 runs it under xpcall, shuts the menu and the callbacks
---                 at once, then cleans up. status: "ended",
+--                 runs it under xpcall, closes the gate and shuts the menu
+--                 and the callbacks at once, then cleans up. status: "ended",
 --                 "exit" (sys.exit), "stopped" (Stop program), "error" or
 --                 "compile"; err (the last two) and printed are cleanText'd
--- Sandbox.cleanup(pc, run)  spec 9.4: drops run.env; releases what
---                 run.tracked holds (callbacks first); clears the menu;
+-- Sandbox.cleanup(pc, run)  spec 9.4: closes the gate; drops run.env;
+--                 releases what run.tracked holds (callbacks first) and
+--                 clears the menu, until nothing is tracked;
 --                 undoes every RESETS entry (UNDO); restores the five library
 --                 tables; collects. Safe to call twice
 -- Sandbox.UNDO    reset name -> the undo cleanup runs (one per RESETS name)
 -- Sandbox.cleanText(s, max)  a program's text as printable ASCII lines
 -- Sandbox.safeText(v)  any program value as text, without running its code
 -- Sandbox.checkPath(dataDir, p) -> abs | nil, "access denied"
--- Sandbox.STOP    the private sentinel sys.exit() raises
 -- Sandbox.lockStrings()  the app calls it once at start
 -- Sandbox.AUDIT   src/sandbox_api.lua: what programs get, and why (its
 --                 header comment is spec 9.4's table)
@@ -44,10 +48,11 @@
 -- Sandbox.WRAPS   wrap name -> builder of the sandbox function
 --
 -- picocalc is an allowlist built from AUDIT alone: plain tables (never the
--- real modules) holding copied constants, real function references, or
--- wrappers. Objects whose methods take paths are proxies: tables with a
--- locked metatable whose methods check paths and unwrap proxies on the way
--- in, and wrap results on the way out.
+-- real modules) holding copied constants and wrappers, every one behind the
+-- run-over gate (a pass-through is the real function called through the
+-- gate). Objects whose methods take paths or callbacks, or reach the screen,
+-- are proxies: tables with a locked metatable whose methods check paths, wrap
+-- callbacks and unwrap proxies on the way in, and wrap results on the way out.
 --
 -- The key stays out of reach. Every route from a program to keys.txt,
 -- prefs.json, the chats or the app's globals, and how it is shut (keep this
@@ -82,17 +87,49 @@
 --   - Settings and stores: config/appconfig are the program's own
 --     <data>/config.json; game.save is <data>/saves/; sysconfig is absent.
 --   - The real sys.exit (sticky, it would close the chat): replaced by
---     raising STOP.
---   - Program code running inside the chat after the run: setmetatable
---     refuses __gc; collectgarbage cannot stop or retune the collector. The
---     first thing after the program's xpcall returns (shut, ruling R24)
---     clears the menu, whose callbacks the firmware runs unprotected, then
---     sets an HTTP connection's callbacks to nil, closes a TCP socket (which
---     drops its own) and replaces a player's finish and loop callbacks with a
---     no-op; a menu item that still fires before that raises into a pcall.
---     The Stop item does nothing once the run is over. No program value is
---     ever tostring'd or concatenated outside the program's own calls
---     (safeText), so its __tostring never runs in the chat.
+--     raising the run's STOP.
+--   - Program code after the run (final review C1). Once the program is
+--     over, no program code keeps a capability, and the firmware calls no
+--     program code at all:
+--       - The gate: run.over closes inside the protected call, the moment the
+--         main chunk returns or its error reaches the runner (and again as
+--         xpcall returns, and first thing in shut and cleanup). After that,
+--         every function the program can hold does nothing and returns
+--         nothing: every picocalc function (pass-throughs included), print,
+--         the sandbox's own functions (sys.exit, addMenuItem, loadlib,
+--         config, fs, game.save...), and every method of every proxy. A
+--         library loaded with sys.loadlib sees only the env's picocalc, so it
+--         is gated too. A creator whose object comes back after the gate
+--         closed (the run ended during the call) releases it at once and
+--         returns nil; addMenuItem adds nothing.
+--       - Callbacks: every function a program hands to the firmware (menu
+--         items, HTTP and TCP callbacks, player finish and loop callbacks,
+--         progress functions) is wrapped behind the gate (callbackOf), so
+--         one the firmware fires after the gate runs no program code. That
+--         is why HTTP connections and TCP sockets are proxies (their callback
+--         setters are methods), and a socket's callbacks get its proxy, never
+--         the real socket. The framebuffer handle (getBackBuffer) is a proxy
+--         too, so a handle the program kept cannot read the screen later.
+--       - Then shut (ruling R24) takes back the menu (the firmware runs its
+--         callbacks unprotected), an HTTP connection's callbacks (set to
+--         nil), a TCP socket's (closed) and a player's (a no-op); cleanup
+--         closes and stops the rest, repeating until nothing is tracked.
+--       - No finalisers: setmetatable refuses __gc; collectgarbage cannot stop
+--         or retune the collector. No program value is ever tostring'd or
+--         concatenated outside the program's own calls (safeText), so its
+--         __tostring never runs in the chat.
+--       - What the gate does not cover, and why that is safe: methods of the
+--         real objects the program gets unproxied (images, sprites, fonts,
+--         grids, terminals, cameras, meshes, crypto contexts) are not gated.
+--         None of them can arm a callback (the firmware keeps Lua callbacks
+--         only for menu items, sound players, HTTP and TCP: every luaL_ref in
+--         lua_bridge_*.c), and only program code can call them, and none runs
+--         after the gate. The few instructions between the program's last
+--         one and the gate are still the run: a callback the firmware fires
+--         there has the program's capabilities, as during the run (spec
+--         9.7). A program that catches the stop with its own pcall keeps
+--         running, and keeps its capabilities, until it ends (spec 9.7; Exit
+--         App is the fallback).
 --   - The app's own requests: App:runProgram refuses to run while a reply is
 --     arriving (9.2), and cancels a pending title request first.
 local AUDIT = require("src.sandbox_api")
@@ -116,8 +153,7 @@ local PASS = { "assert", "error", "ipairs", "next", "pairs", "pcall", "xpcall", 
 local BASE = {}
 for _, k in _ipairs(PASS) do BASE[k] = _G[k] end
 
-Sandbox.STOP = _setmetatable({}, { __tostring = function() return "program ended" end, __metatable = false })
-local STOP = Sandbox.STOP
+local function stopText() return "program ended" end
 
 Sandbox.RESETS = {
     background = "sys.resumeBackground()",
@@ -184,6 +220,155 @@ local function addTracked(run, kind, v)
     list[#list + 1] = v
 end
 
+-- A call that may be missing (the firmware or a fake lacks the module) or
+-- may raise: cleanup goes on either way.
+local function try(mod, name, ...)
+    local f = _type(mod) == "table" and mod[name]
+    if _type(f) == "function" then return _pcall(f, ...) end
+    return false
+end
+
+local function closeObj(o) o:close() end
+local function stopObj(o) o:stop() end
+local function noop() end
+
+-- An HTTP connection's callbacks, set to nil before it closes: the firmware
+-- keeps them until the connection is collected, and they are program code.
+local HTTP_CALLBACKS = { "setRequestCallback", "setHeadersReadCallback", "setRequestCompleteCallback",
+                         "setConnectionClosedCallback" }
+local function detachHttp(c)
+    for _, m in _ipairs(HTTP_CALLBACKS) do
+        local f = c[m]
+        if f then _pcall(f, c, nil) end
+    end
+end
+
+-- A player's finish and loop callbacks are program code that the firmware
+-- fires later, from its service pass, even inside the chat. The setters take
+-- only a function, so each is replaced with a no-op, which also drops a
+-- pending call; then the player stops.
+local function quietPlayer(p)
+    if p.setFinishCallback then p:setFinishCallback(noop) end
+    if p.setLoopCallback then p:setLoopCallback(noop) end
+end
+
+-- The chat's own fonts (ctx.chatFonts), never unloaded for a program.
+local function isChatFont(run, id)
+    local set = run.chatFonts
+    if not set then
+        set = {}
+        for _, f in _ipairs(run.ctx and run.ctx.chatFonts or {}) do set[f] = true end
+        run.chatFonts = set
+    end
+    return set[id] == true
+end
+
+-- Releases one object the program made, by its tracked kind: what cleanup
+-- does to each (callbacks first), and what a creator does with an object it
+-- made as the gate closed. Each step is protected.
+local function releaseNow(run, kind, v)
+    local pc = run.pc
+    if kind == "http" then
+        _pcall(detachHttp, v)
+        _pcall(closeObj, v)
+    elseif kind == "tcp" then
+        _pcall(closeObj, v) -- drops its callbacks (its nil setter would leave them held)
+    elseif kind == "sound" then
+        _pcall(quietPlayer, v)
+        _pcall(stopObj, v)
+    elseif kind == "file" then
+        -- fs handles close with fs.close; a zip archive has its own :close()
+        if not try(pc.fs, "close", v) then _pcall(closeObj, v) end
+    elseif kind == "font" then
+        -- loadFont ids are unloaded; font.new objects free their slot when collected
+        if _mathtype(v) == "integer" and not isChatFont(run, v) then try(pc.display, "unloadFont", v) end
+    end
+end
+
+-- ------------------------------------------------------------ the run-over gate
+--
+-- run.over is the gate. It is false while the program runs and true from the
+-- moment the program is over: its main chunk returned, or its error reached
+-- the runner (both inside the protected call), or the protected call returned
+-- (shut and cleanup set it again, first). Every function the program can
+-- reach checks it before anything else and, once it is set, does nothing and
+-- returns nothing: the module functions, the sandbox's own functions, print,
+-- the proxies' methods, and every callback the program handed to the firmware
+-- (which the sandbox wraps). So program code that runs late (a callback the
+-- firmware fires while the runner shuts the run) has no capabilities, and
+-- after the gate the firmware calls no program code at all.
+
+local MEM = "not enough memory"
+
+-- Raises a C function's error, which came back through pcall, as if the
+-- program had called the function itself. luaL_error took its position from
+-- the function's caller, pcall, which has none, so the program's line is put
+-- back (level 2: this is tail-called by the function the program called).
+-- luaL_argerror found no name for it ('?'), so its name is put back, and a
+-- method's self is not counted (as for a method call). An error that already
+-- has a position (Lua code the function called raised it), a memory error,
+-- and any value that is not a string (the stop sentinel, the firmware's exit)
+-- go on as they are.
+local function raiseC(name, method, e)
+    if _type(e) ~= "string" or e == MEM or e:find("^[^\n]-:%d+: ") then _error(e, 0) end
+    local k, rest = e:match("^bad argument #(%d+) to '%?'(.*)$")
+    if k then
+        k = _tointeger(_tonumber(k)) or 0
+        if method and k > 1 then k = k - 1 end
+        e = "bad argument #" .. k .. " to '" .. name .. "'" .. rest
+    end
+    _error(e, 2)
+end
+
+local function relay(name, method, ok, ...)
+    if ok then return ... end
+    return raiseC(name, method, (...))
+end
+
+-- A real function the program gets as it is (an audited pass-through), behind
+-- the gate. It is called through pcall so that its errors keep the program's
+-- name:line (spec 9.2 step 5); see raiseC.
+local function gateC(run, name, f)
+    return function(...)
+        if run.over then return end
+        return relay(name, false, _pcall(f, ...))
+    end
+end
+
+-- One of the sandbox's own functions, behind the gate. The tail call keeps
+-- the error levels inside f as they are.
+local function gateLua(run, f)
+    return function(...)
+        if run.over then return end
+        return f(...)
+    end
+end
+
+-- A program function the firmware will call later (a menu item; a
+-- connection's, a socket's or a player's callback; a progress function),
+-- behind the gate: once the program is over, the firmware calls this, and no
+-- program code runs. `real` is the object the callback belongs to, if any:
+-- the firmware passes it to a socket's callbacks, and the program gets its
+-- proxy instead.
+local function callbackOf(run, fn, real, proxy)
+    if _type(fn) ~= "function" then return fn end
+    if real == nil then
+        return function(...)
+            if run.over then return end
+            return fn(...)
+        end
+    end
+    return function(...)
+        if run.over then return end
+        local n = _select("#", ...)
+        local a = { ... }
+        for i = 1, n do
+            if _rawequal(a[i], real) then a[i] = proxy end
+        end
+        return fn(unpack(a, 1, n))
+    end
+end
+
 local function isType(name) return name:match("^%u") ~= nil end
 
 local function resolve(root, path)
@@ -214,25 +399,37 @@ end
 
 -- ------------------------------------------------------------ proxies
 
-local function finish(run, O, ret, track, ...)
-    local r = pack(...)
-    local v = r[1]
-    if v ~= nil and v ~= false then
-        if track then addTracked(run, track, v) end
-        if ret then r[1] = O.wrap(ret, v) end
+-- The results of a creator (pcall's): the first is tracked and handed out as
+-- a proxy. One made as the gate closed (the program was over by the time the
+-- call returned) is released at once and never handed over.
+local function finish(run, O, ret, track, name, method, ok, ...)
+    if not ok then return raiseC(name, method, (...)) end
+    local v = ...
+    if v == nil or v == false then return ... end
+    if run.over then
+        if track then releaseNow(run, track, v) end
+        return nil
     end
+    if track then addTracked(run, track, v) end
+    if not ret then return ... end
+    local r = pack(...)
+    r[1] = O.wrap(ret, v)
     return unpack(r, 1, r.n)
 end
 
--- A wrapper for an entry with path/unwrap/ret/track. `call` gets the
--- prepared arguments; with `method` set, argument 1 is the real self and
--- the entry's indexes count from argument 2. Error level 2 is the program
--- either way: a method's wrapper tail-calls this one.
-local function generic(run, O, e, call, method)
+-- A wrapper for an entry with path/unwrap/ret/track/callback, behind the
+-- gate. `fn` is the real function; with `method` set, argument 1 is the real
+-- self (the method `name` is looked up on it), and the entry's indexes count
+-- from argument 2. Error level 2 is the program either way: a method's
+-- wrapper tail-calls this one. A method's callbacks are wrapped by the
+-- method (they need its proxy); a module function's are wrapped here.
+local function generic(run, O, e, name, fn, method)
     local path, unwrap, ret, track, raises = e.path, e.unwrap, e.ret, e.track, e.raises
+    local cbs = not method and e.callback or nil
     local off = method and 1 or 0
     local dataDir = run.dataDir
     return function(...)
+        if run.over then return end
         local n = _select("#", ...)
         local a = { ... }
         local skip
@@ -261,8 +458,13 @@ local function generic(run, O, e, call, method)
                 end
             end
         end
-        if not ret and not track then return call(unpack(a, 1, n)) end
-        return finish(run, O, ret, track, call(unpack(a, 1, n)))
+        if cbs then
+            for _, i in _ipairs(cbs) do a[i] = callbackOf(run, a[i]) end
+        end
+        local f = fn
+        if method then f = a[1][name] end
+        if not ret and not track then return relay(name, method, _pcall(f, unpack(a, 1, n))) end
+        return finish(run, O, ret, track, name, method, _pcall(f, unpack(a, 1, n)))
     end
 end
 
@@ -274,16 +476,28 @@ local function newObjects(run)
     local O = {}
     function O.realOf(p) return realOf[p] end
 
+    -- A proxy's method, behind the gate. The real method is called through
+    -- pcall, so its errors keep the program's line (raiseC). A callback
+    -- argument is wrapped (callbackOf), with this proxy for the object.
     local function method(kind, name, e)
-        local function call(real, ...) return real[name](real, ...) end
-        local body = call
-        if e.path or e.unwrap or e.ret or e.track then body = generic(run, O, e, call, true) end
+        local body
+        if e.path or e.unwrap or e.ret or e.track then
+            body = generic(run, O, e, name, nil, true)
+        else
+            body = function(real, ...) return relay(name, true, _pcall(real[name], real, ...)) end
+        end
+        local cbs = e.callback
         return function(self, ...)
+            if run.over then return end
             local real = realOf[self]
             if real == nil or kindOf[self] ~= kind then
                 _error("bad self: " .. kind .. ":" .. name .. " needs a " .. kind, 2)
             end
-            return body(real, ...)
+            if cbs == nil then return body(real, ...) end
+            local n = _select("#", ...)
+            local a = { ... }
+            for _, i in _ipairs(cbs) do a[i] = callbackOf(run, a[i], real, self) end
+            return body(real, unpack(a, 1, n))
         end
     end
 
@@ -296,6 +510,7 @@ local function newObjects(run)
                      __tostring = function() return kind end }
         if methods.close then
             mt.__close = function(p)
+                if run.over then return end -- cleanup closes it
                 local real = realOf[p]
                 if real ~= nil then real:close() end
             end
@@ -454,6 +669,7 @@ local function fileSystem(run)
     end
 
     local function seek(h, offset, whence)
+        if run.over then return end
         local r = real(h)
         if whence == nil then whence = "set" end
         if not WHENCE[whence] then _error("bad argument #3 to 'seek' (invalid option)", 2) end
@@ -475,13 +691,28 @@ local function fileSystem(run)
     end
 
     -- What a handle offers; h:read(n) and fs.read(h, n) are the same call.
+    -- Each is behind the gate (a handle is used through these, never
+    -- through the sandbox's install).
     local H = {
-        read = function(h, n) return fs.read(real(h), n) end,
-        write = function(h, s) return fs.write(real(h), s) end,
-        tell = function(h) return fs.tell(real(h)) end,
-        fsize = function(h) return fs.fsize(real(h)) end,
+        read = function(h, n)
+            if run.over then return end
+            return fs.read(real(h), n)
+        end,
+        write = function(h, s)
+            if run.over then return end
+            return fs.write(real(h), s)
+        end,
+        tell = function(h)
+            if run.over then return end
+            return fs.tell(real(h))
+        end,
+        fsize = function(h)
+            if run.over then return end
+            return fs.fsize(real(h))
+        end,
         seek = seek,
         close = function(h)
+            if run.over then return end -- cleanup closes it
             if h == nil then return fs.close(nil) end
             return fs.close(real(h))
         end,
@@ -494,12 +725,17 @@ local function fileSystem(run)
     local M = {}
     for k, f in _pairs(H) do M[k] = f end
     M.open = function(path, mode)
+        if run.over then return end
         local abs = checkPath(run.dataDir, path)
         if not abs then return nil, DENIED end
         if mode == nil then mode = "r" end
         if _type(mode) ~= "string" then return nil, DENIED end
         local h, err = fs.open(abs, mode)
         if not h then return nil, err end
+        if run.over then -- opened as the gate closed
+            releaseNow(run, "file", h)
+            return nil
+        end
         addTracked(run, "file", h)
         local p = _setmetatable({}, meta)
         realOf[p] = h
@@ -513,21 +749,25 @@ end
 -- ------------------------------------------------------------ wraps
 
 -- WRAPS[name](run, real, entry, fname, O) -> the sandbox function, or nil
--- when it needs a real function the firmware lacks.
+-- when it needs a real function the firmware lacks. install puts each behind
+-- the gate (gateLua).
 local WRAPS = {}
 Sandbox.WRAPS = WRAPS
 
 function WRAPS.exit(run)
     return function()
         run.exited = true
-        _error(STOP, 0)
+        _error(run.STOP, 0)
     end
 end
 
+-- The item's callback is the program's behind the gate (callbackOf): the
+-- firmware calls it unprotected, after the menu closes.
 function WRAPS.addMenuItem(run, real)
     if _type(real) ~= "function" then return nil end
     return function(label, fn)
-        real(label, fn)
+        local ok, err = _pcall(real, label, callbackOf(run, fn))
+        if not ok then return raiseC("addMenuItem", false, err) end
         local m = run.tracked.menu
         m[#m + 1] = { label = label, fn = fn }
     end
@@ -560,11 +800,9 @@ end
 
 function WRAPS.unloadFont(run, real)
     if _type(real) ~= "function" then return nil end
-    local chat = {}
-    for _, id in _ipairs(run.ctx.chatFonts or {}) do chat[id] = true end
     return function(id)
         id = toInteger(id) -- the firmware reads it as an integer, strings included
-        if id == nil or chat[id] then return end
+        if id == nil or isChatFont(run, id) then return end
         local list = run.tracked.font
         for k, v in _pairs(list) do
             if v == id then
@@ -598,8 +836,12 @@ function WRAPS.fontNew(run, real)
             if not abs then _error(DENIED .. ": " .. v, 2) end
             v = abs
         end
-        local f = real(v)
-        if f ~= nil then addTracked(run, "font", f) end
+        local ok, f = _pcall(real, v)
+        if not ok then return raiseC("new", false, f) end
+        if f ~= nil then
+            if run.over then return nil end -- made as the gate closed: left to the collector
+            addTracked(run, "font", f)
+        end
         return f
     end
 end
@@ -622,16 +864,21 @@ end
 
 -- ------------------------------------------------------------ the program's picocalc
 
+-- Every function this returns is behind the gate: a pass-through (gateC), a
+-- sandbox function (gateLua), or a generic wrapper (which checks it itself).
 local function install(run, O, e, name, real)
     if e.const then
         local ty = _type(real)
         if ty == "nil" or ty == "function" or ty == "table" then return nil end
         return real
     end
-    if e.wrap then return WRAPS[e.wrap](run, real, e, name, O) end
+    if e.wrap then
+        local f = WRAPS[e.wrap](run, real, e, name, O)
+        return f and gateLua(run, f)
+    end
     if _type(real) ~= "function" then return nil end
-    if not (e.path or e.unwrap or e.ret or e.track) then return real end
-    return generic(run, O, e, real, false)
+    if not (e.path or e.unwrap or e.ret or e.track or e.callback) then return gateC(run, name, real) end
+    return generic(run, O, e, name, real, false)
 end
 
 local function buildPicocalc(run, pc, O)
@@ -677,6 +924,7 @@ local function makePrint(run)
     local log = _type(run.pc.sys) == "table" and run.pc.sys.log
     local printed = run.printed
     return function(...)
+        if run.over then return end
         local n = _select("#", ...)
         local parts = {}
         for i = 1, n do parts[i] = _tostring((_select(i, ...))) end
@@ -692,7 +940,10 @@ end
 function Sandbox.newRun(pc, ctx)
     local run = {
         pc = pc, ctx = ctx, dataDir = trimDir(ctx.dataDir or ""),
-        printed = {}, appMenu = {}, exited = false,
+        printed = {}, appMenu = {}, exited = false, over = false,
+        -- this run's own sentinel (a program can rawset fields on it; the
+        -- next run never sees them, and never takes it for its own)
+        STOP = _setmetatable({}, { __tostring = stopText, __metatable = false }),
         tracked = { font = weakList(), file = weakList(), http = weakList(), tcp = weakList(),
                     sound = weakList(), menu = {} },
         snapshot = {},
@@ -743,38 +994,6 @@ end
 
 -- ------------------------------------------------------------ running (spec 9.2, 9.4, 9.5)
 
--- A call that may be missing (the firmware or a fake lacks the module) or
--- may raise: cleanup goes on either way.
-local function try(mod, name, ...)
-    local f = _type(mod) == "table" and mod[name]
-    if _type(f) == "function" then return _pcall(f, ...) end
-    return false
-end
-
-local function closeObj(o) o:close() end
-local function stopObj(o) o:stop() end
-local function noop() end
-
--- An HTTP connection's callbacks, set to nil before it closes: the firmware
--- keeps them until the connection is collected, and they are program code.
-local HTTP_CALLBACKS = { "setRequestCallback", "setHeadersReadCallback", "setRequestCompleteCallback",
-                         "setConnectionClosedCallback" }
-local function detachHttp(c)
-    for _, m in _ipairs(HTTP_CALLBACKS) do
-        local f = c[m]
-        if f then _pcall(f, c, nil) end
-    end
-end
-
--- A player's finish and loop callbacks are program code that the firmware
--- fires later, from its service pass, even inside the chat. The setters take
--- only a function, so each is replaced with a no-op, which also drops a
--- pending call; then the player stops.
-local function quietPlayer(p)
-    if p.setFinishCallback then p:setFinishCallback(noop) end
-    if p.setLoopCallback then p:setLoopCallback(noop) end
-end
-
 -- What cleanup does to undo each reset in AUDIT (Sandbox.RESETS), after every
 -- run, whether or not the program made the call.
 Sandbox.UNDO = {
@@ -822,14 +1041,17 @@ local function restoreLibraries(run)
 end
 
 -- The first thing after the program's xpcall returns, before any other code
--- (ruling R24). The firmware calls a menu item's callback unprotected
--- (lua_call), so a program item chosen now would raise into the chat: the
--- menu is cleared first (nothing of the chat's needs re-adding). Then the
--- callbacks the firmware calls later (protected, but program code running in
--- the chat): an HTTP connection's are set to nil; a TCP socket is closed,
--- which drops them (its nil setter would leave the old reference held); a
--- player's are replaced with a no-op. cleanup closes and stops the rest.
+-- (ruling R24). It closes the gate first (main and onError already did, inside
+-- the protected call; this covers a memory error, which skips onError), so
+-- from here on the program's functions do nothing and its callbacks run no
+-- program code. Then it takes back what the firmware would call later: the
+-- menu (the firmware calls an item unprotected; nothing of the chat's needs
+-- re-adding); an HTTP connection's callbacks are set to nil; a TCP socket is
+-- closed, which drops them (its nil setter would leave the old reference
+-- held); a player's are replaced with a no-op. cleanup closes and stops the
+-- rest.
 local function shut(pc, run)
+    run.over = true
     try(pc.sys, "clearMenuItems")
     local t = run.tracked
     emptyOut(t.menu)
@@ -842,53 +1064,57 @@ local function shut(pc, run)
     for _, p in _pairs(t.sound) do _pcall(quietPlayer, p) end
 end
 
+-- What cleanup releases, kind by kind: program code the firmware could still
+-- call goes first (connections, sockets, players), then files and fonts. The
+-- menu is cleared between them.
+local RELEASE_FIRST = { "http", "tcp", "sound" }
+local RELEASE_THEN = { "file", "font" }
+
+local function releaseKinds(run, kinds)
+    local t = run.tracked
+    for _, kind in _ipairs(kinds) do
+        local list = t[kind]
+        for k, v in _pairs(list) do
+            list[k] = nil
+            releaseNow(run, kind, v)
+        end
+    end
+end
+
+local function anyTracked(run)
+    for _, list in _pairs(run.tracked) do
+        if _next(list) ~= nil then return true end
+    end
+    return false
+end
+
 -- Sandbox.cleanup(pc, run): the Lua-visible version of the firmware's exit
--- teardown (spec 9.4), safe to call twice. The program's env is dropped
--- first, so what it held can be collected. Then: the connections and players
--- the program made, with their callbacks; the menu (the program's items and
--- "Stop program": spec 9.2 removes the item after cleanup, but its callback
--- is inert once the run is over, and this way no program item can be chosen
--- during cleanup); files and fonts; every reset in AUDIT; the five library
--- tables; and a full collection. Each step is protected, so one that fails
--- (out of memory, a firmware error) does not skip the rest.
+-- teardown (spec 9.4), safe to call twice. The gate is closed first (for the
+-- compile error and runner failure paths, which never ran shut), and the
+-- program's env is dropped, so what it held can be collected. Then: the
+-- connections and players the program made, with their callbacks; the menu
+-- (the program's items and "Stop program": spec 9.2 removes the item after
+-- cleanup, but its callback is inert once the run is over, and this way no
+-- program item can be chosen during cleanup); files and fonts. That release
+-- repeats until every tracked list is empty: nothing can be added once the
+-- gate is closed, so a second pass only confirms it (the bound is a
+-- backstop). Then every reset in AUDIT, the five library tables, and a full
+-- collection. Each step is protected, so one that fails (out of memory, a
+-- firmware error) does not skip the rest.
 function Sandbox.cleanup(pc, run)
+    run.over = true
     run.active = false
     run.env = nil
     local t = run.tracked
-    -- Program code the firmware could still call goes first: connections
-    -- (tcp:close drops its callbacks itself) and players.
-    for k, c in _pairs(t.http) do
-        t.http[k] = nil
-        _pcall(detachHttp, c)
-        _pcall(closeObj, c)
-    end
-    for k, c in _pairs(t.tcp) do
-        t.tcp[k] = nil
-        _pcall(closeObj, c)
-    end
-    for k, p in _pairs(t.sound) do
-        t.sound[k] = nil
-        _pcall(quietPlayer, p)
-        _pcall(stopObj, p)
-    end
-    -- The menu: the program's items and "Stop program" (the chat has none of
-    -- its own outside a run).
-    try(pc.sys, "clearMenuItems")
-    emptyOut(t.menu)
-    emptyOut(run.appMenu)
-    -- fs handles close with fs.close; a zip archive (also tracked as a file)
-    -- has its own :close().
-    for k, h in _pairs(t.file) do
-        t.file[k] = nil
-        if not try(pc.fs, "close", h) then _pcall(closeObj, h) end
-    end
-    -- loadFont ids are unloaded (never one of the chat's); font.new objects
-    -- free their slot when collected, below.
-    local chat = {}
-    for _, id in _ipairs(run.ctx and run.ctx.chatFonts or {}) do chat[id] = true end
-    for k, f in _pairs(t.font) do
-        t.font[k] = nil
-        if _mathtype(f) == "integer" and not chat[f] then try(pc.display, "unloadFont", f) end
+    for _ = 1, 8 do
+        releaseKinds(run, RELEASE_FIRST)
+        -- the program's items and "Stop program" (the chat has none of its
+        -- own outside a run)
+        try(pc.sys, "clearMenuItems")
+        emptyOut(t.menu)
+        emptyOut(run.appMenu)
+        releaseKinds(run, RELEASE_THEN)
+        if not anyTracked(run) then break end
     end
     local names = {}
     for name in _pairs(Sandbox.RESETS) do names[#names + 1] = name end
@@ -934,17 +1160,22 @@ end
 Sandbox.safeText = safeText
 
 -- The message handler: no traceback (debug is blocked) and no program code.
-local function handler(e)
-    if _rawequal(e, STOP) then return STOP end
+-- This run's sentinel stays itself; anything else becomes text.
+local function handler(run, e)
+    if _rawequal(e, run.STOP) then return e end
     return safeText(e)
 end
 
--- The program under xpcall, then shut at once (R24). The outcome is recorded
--- inside the protected call (main sets run.ok; onError sets run.ok and
--- run.err), so a callback that raises right after xpcall returns can't lose
--- it. Memory errors skip the handler: theirs comes from xpcall.
+-- The program under xpcall, then shut at once (R24). The gate closes and the
+-- outcome is recorded inside the protected call (main sets run.over and
+-- run.ok; onError sets run.over, run.ok and run.err), so a callback that
+-- fires right after the program's last instruction finds it closed, and one
+-- that raises right after xpcall returns can't lose the outcome. Memory
+-- errors skip the handler: the gate then closes as xpcall returns, and the
+-- outcome comes from xpcall.
 local function runThenShut(pc, run, main, onError)
     local ok, err = _xpcall(main, onError)
+    run.over = true
     shut(pc, run)
     run.active = false
     if run.ok == nil then run.ok, run.err = ok, err end
@@ -982,23 +1213,29 @@ function Sandbox.execute(pc, run, src)
     run.saved = { font = d.getFont and d.getFont() or d.FONT_6X8 }
     blank(d)
     -- "Stop program" (spec 9.5): the callback ends the program by raising
-    -- STOP, but only while it runs; the item is in run.appMenu so the
-    -- program's own clearMenuItems puts it back.
+    -- the run's STOP, but only while it runs; the item is in run.appMenu so
+    -- the program's own clearMenuItems puts it back.
     local item = { label = "Stop program" }
     function item.fn()
-        if run.active then
+        if run.active and not run.over then
             run.stopping = true
-            _error(STOP, 0)
+            _error(run.STOP, 0)
         end
     end
     run.appMenu[#run.appMenu + 1] = item
     sys.addMenuItem(item.label, item.fn)
+    -- The gate closes the moment the program is over: as its main chunk
+    -- returns, or as its error reaches the runner (onError runs before the
+    -- stack unwinds, so the program's own __close handlers, which run while
+    -- it unwinds, already find it closed).
     local function main()
         fn()
+        run.over = true
         run.ok = true
     end
     local function onError(e)
-        local v = handler(e)
+        run.over = true
+        local v = handler(run, e)
         run.ok, run.err = false, v
         return v
     end
@@ -1013,7 +1250,7 @@ function Sandbox.execute(pc, run, src)
         for _ = 1, 3 do
             if _pcall(shut, pc, run) then break end
         end
-        if run.ok == nil then run.ok, run.err = false, handler(why) end
+        if run.ok == nil then run.ok, run.err = false, handler(run, why) end
     end
     run.active = false
     local t1 = sys.getTimeMs()
@@ -1021,7 +1258,7 @@ function Sandbox.execute(pc, run, src)
     local status
     if ok then
         status = "ended"
-    elseif _rawequal(err, STOP) then
+    elseif _rawequal(err, run.STOP) then
         status = run.stopping and "stopped" or "exit"
     else
         status = "error"

@@ -13,14 +13,18 @@
 --          that is handled: R = reset after the run (Sandbox.RESETS, done by
 --          Task 15's cleanup), T = what it returns is tracked and released
 --          after the run, W = replaced by a sandbox function, H = recorded as
---          harmless. Calls not named under state are pure, or work on the
---          program's own objects.
+--          harmless, C = a function argument the firmware calls (later, or
+--          during the call) is wrapped behind the run-over gate. Calls not
+--          named under state are pure, or work on the program's own objects.
+--
+-- Every function and method here is behind the run-over gate (src/sandbox.lua):
+-- once the program is over it does nothing.
 --
 -- sys        get    time, sleep, battery, power, clock, memory, version, log,
 --                   resetIdleTimer, loadlib, addMenuItem, clearMenuItems,
 --                   pause/resumeBackground, qmiPsram*
---            state  exit W: raises Sandbox.STOP, never the real (sticky) exit.
---                   addMenuItem W, T menu. clearMenuItems W: the program's
+--            state  exit W: raises the run's STOP, never the real (sticky) exit.
+--                   addMenuItem W, T menu, C (the item). clearMenuItems W: the program's
 --                   items only. pauseBackground R. loadlib W: the app reads
 --                   /system/lib/<name>.lua; it loads into the program's env.
 --            denied reboot, triggerFault, applyUpdate, pioPsramRead/Write/Size
@@ -31,7 +35,8 @@
 --            path   every path argument: open, exists, readFile, size, isDir,
 --                   listDir, mkdir, appPath, copy (both), delete,
 --                   deleteRecursive, rename (both), stat, glob
---            state  open T file. appPath W (in the program's folder).
+--            state  open T file. appPath W (in the program's folder). copy C
+--                   (its progress function, arg 3).
 --            denied browse (a file browser over the card), setSlowMode (the SD
 --                   bus speed)
 -- config,    get    get, set, save, load, clear, reset
@@ -42,7 +47,9 @@
 --                   buffer, effects, constants
 --            path   loadFont
 --            state  setFont R, setClipRect R, setScrollArea/Offset R, loadFont
---                   T font, unloadFont W (only ids the program loaded)
+--                   T font, unloadFont W (only ids the program loaded).
+--                   getBackBuffer: a Framebuffer proxy, so a handle the
+--                   program keeps reads nothing once it is over
 --            denied setBrightness (a system setting the chat cannot read back)
 -- input      get    every call and constant          state  setRepeat R
 -- gamepad    get    every call and constant
@@ -56,6 +63,8 @@
 --            state  setTransparentColor R, image.preload R, the sprite display
 --                   list R (sprite:add, addSprite, addEmptyCollisionSprite,
 --                   addWallSprites, setClipRectsInRange), font.new W, T font.
+--                   sprite.performOnAllSprites C. (sprite:setBackground-
+--                   DrawingCallback stores nothing: the firmware ignores it.)
 --                   setColor, setBackgroundColor, setStencilPattern,
 --                   blinker.stopAll H (graphics-only state; the chat draws with
 --                   display.*)
@@ -71,22 +80,28 @@
 --                   MP3Player:load
 --            state  players T sound; resetTime H. Objects with a path-taking
 --                   method are handed out as proxies (the types at the end),
---                   on every route that returns one.
+--                   on every route that returns one. SamplePlayer and
+--                   FilePlayer setFinishCallback/setLoopCallback C.
 -- modplayer  get    create                           path   ModPlayer:load
 --            state  T sound, a proxy
 -- video      denied player (playback boosts the clock to 300 MHz and pauses the
 --                   WiFi radio)
 -- network    get    getStatus, isHwDisconnected, http.new, constants
---            state  http.new T http
+--            state  http.new T http, an HttpConnection proxy: its four
+--                   callback setters are C
 --            denied setEnabled (turns the device's WiFi on or off)
 -- wifi       get    isAvailable, getStatus, getIP, getSSID, hasInternet, constants
 --            denied connect, disconnect (the device's WiFi, which the chat needs)
--- tcp        get    new, constants                   state  new T tcp
+-- tcp        get    new, constants                   state  new T tcp, a
+--                                                           TcpSocket proxy:
+--                                                           its three callback
+--                                                           setters are C
 -- crypto     get    every call                       path   sha256File
 -- zip        get    list, extract, open
 --            path   list, extract (both), open, ZipArchive:extract,
 --                   extractEntry, extractAll
---            state  open T file, a proxy
+--            state  open T file, a proxy. extract and
+--                   ZipArchive:extractAll C (their progress functions)
 -- json       get    every call and null
 -- perf       get    every call                       state  setTargetFPS R
 -- repl       get    every call                       state  print, clear, echo H
@@ -121,6 +136,10 @@
 --   harmless = true   changes state outside the program, recorded as harmless.
 --   raises = true     a denied path raises instead of returning nil.
 --   const = true      a constant: its value is copied.
+--   callback = {i, ...}  those arguments are program functions the firmware
+--                     calls (later, or during the call): each is wrapped
+--                     behind the run-over gate, so none runs once the
+--                     program is over.
 --   deny = "<reason>" programs never get it.
 -- Object types are keyed by a capitalised name (AUDIT.Sample); their
 -- entries are methods, in the same format, with argument 1 the first
@@ -137,7 +156,7 @@ AUDIT.sys = {
     reboot = { deny = "reboots the device" },
     triggerFault = { deny = "crashes the device on purpose (HardFault, then a reboot)" },
     applyUpdate = { deny = "flashes firmware; only the OS updaters get it" },
-    addMenuItem = { wrap = "addMenuItem", track = "menu" },
+    addMenuItem = { wrap = "addMenuItem", track = "menu", callback = { 2 } },
     clearMenuItems = { wrap = "clearMenuItems" },
     pauseBackground = { reset = "background" },
     resumeBackground = {},
@@ -171,7 +190,7 @@ AUDIT.fs = {
     mkdir = { path = { 1 } },
     appPath = { path = { 1 }, wrap = "appPath" },
     browse = { deny = "a file browser over the whole card, outside the program's folder" },
-    copy = { path = { 1, 2 } },
+    copy = { path = { 1, 2 }, callback = { 3 } }, -- (src, dst [, progress])
     delete = { path = { 1 } },
     deleteRecursive = { path = { 1 } },
     rename = { path = { 1, 2 } },
@@ -196,11 +215,12 @@ AUDIT.sysconfig = {
 }
 
 AUDIT.display = {
-    clear = {}, setPixel = {}, getPixel = {}, getBackBuffer = {}, fillRect = {}, drawRect = {},
+    clear = {}, setPixel = {}, getPixel = {}, fillRect = {}, drawRect = {},
     drawLine = {}, drawText = {}, textWidth = {}, flush = {}, flushRows = {}, flushRegion = {},
     getWidth = {}, getHeight = {}, rgb = {}, drawCircle = {}, fillCircle = {}, fillVLine = {},
     fillHLine = {}, fillTriangle = {}, fillVLineGradient = {}, drawTexturedColumn = {},
     drawPlane = {}, applyEffect = {}, getClipRect = {}, clearClipRect = {}, getFont = {},
+    getBackBuffer = { ret = "Framebuffer" },
     getFontWidth = {}, getFontHeight = {}, getScrollOffset = {},
     setBrightness = { deny = "the backlight is a system setting, and the chat cannot read it back to restore it" },
     setClipRect = { reset = "clip" },
@@ -264,7 +284,7 @@ AUDIT["graphics.image"] = {
 -- (sprite:add() is a method, so the reset is unconditional).
 AUDIT["graphics.sprite"] = {
     new = {}, removeSprite = {}, update = {}, getAllSprites = {}, spriteCount = {}, removeAll = {},
-    removeSprites = {}, performOnAllSprites = {}, querySpritesAtPoint = {}, querySpritesInRect = {},
+    removeSprites = {}, performOnAllSprites = { callback = { 1 } }, querySpritesAtPoint = {}, querySpritesInRect = {},
     querySpritesAlongLine = {}, querySpriteInfoAlongLine = {}, clearClipRectsInRange = {},
     spriteWithText = {},
     addSprite = { reset = "sprites" },
@@ -331,7 +351,7 @@ AUDIT.network = {
     setEnabled = { deny = "turns the device's WiFi on or off, which the chat needs" },
     kStatusNotConnected = C, kStatusConnected = C, kStatusNotAvailable = C,
 }
-AUDIT["network.http"] = { new = { track = "http" } }
+AUDIT["network.http"] = { new = { track = "http", ret = "HttpConnection" } }
 
 AUDIT.wifi = {
     isAvailable = {}, getStatus = {}, getIP = {}, getSSID = {}, hasInternet = {},
@@ -342,7 +362,7 @@ AUDIT.wifi = {
 }
 
 AUDIT.tcp = {
-    new = { track = "tcp" },
+    new = { track = "tcp", ret = "TcpSocket" },
     CB_CONNECT = C, CB_READ = C, CB_WRITE = C, CB_CLOSED = C, CB_FAILED = C,
 }
 
@@ -354,7 +374,7 @@ AUDIT.crypto = {
 
 AUDIT.zip = {
     list = { path = { 1 } },
-    extract = { path = { 1, 2 } },
+    extract = { path = { 1, 2 }, callback = { 3 } },
     open = { path = { 1 }, ret = "ZipArchive", track = "file" },
 }
 
@@ -383,8 +403,10 @@ AUDIT["game.save"] = {
     delete = { wrap = "gameSave" }, list = { wrap = "gameSave" },
 }
 
--- Object types handed out as proxies: each has a path-taking method, or a
--- method that returns one that does (SamplePlayer:getSample).
+-- Object types handed out as proxies: each has a path-taking method, a
+-- method that returns one that does (SamplePlayer:getSample), a callback
+-- setter, or reaches the screen (Framebuffer). The method lists match the
+-- firmware's method tables (lua_bridge_*.c).
 AUDIT.Sample = {
     load = { path = { 1 } },
     save = { path = { 1 } },
@@ -400,14 +422,15 @@ AUDIT.SamplePlayer = {
     getSample = { ret = "Sample" },
     play = {}, stop = {}, isPlaying = {}, setPaused = {}, getLength = {}, setOffset = {},
     getOffset = {}, setVolume = {}, getVolume = {}, setPlayRange = {}, setRate = {}, getRate = {},
-    setFinishCallback = {}, setLoopCallback = {},
+    setFinishCallback = { callback = { 1 } }, setLoopCallback = { callback = { 1 } },
 }
 
 AUDIT.FilePlayer = {
     load = { path = { 1 } },
     play = {}, stop = {}, pause = {}, resume = {}, isPlaying = {}, getLength = {},
     getSampleRate = {}, getOffset = {}, setOffset = {}, setVolume = {}, getVolume = {},
-    setLoopRange = {}, didUnderrun = {}, setFinishCallback = {}, setLoopCallback = {},
+    setLoopRange = {}, didUnderrun = {}, setFinishCallback = { callback = { 1 } },
+    setLoopCallback = { callback = { 1 } },
     setStopOnUnderrun = {}, setRate = {}, getRate = {},
 }
 
@@ -428,7 +451,31 @@ AUDIT.ZipArchive = {
     close = {},
     extractEntry = { path = { 2 } },
     extract = { path = { 2 } },
-    extractAll = { path = { 1 } },
+    extractAll = { path = { 1 }, callback = { 2 } },
 }
+
+-- picocalc.network.http.new's connection (l_http_methods). The callbacks are
+-- the program's, wrapped behind the gate; get/post take URL paths.
+local CB = { callback = { 1 } }
+AUDIT.HttpConnection = {
+    close = {}, setKeepAlive = {}, setInsecure = {}, setByteRange = {}, setConnectTimeout = {},
+    setReadTimeout = {}, setReadBufferSize = {}, get = {}, post = {}, getError = {}, getProgress = {},
+    getBytesAvailable = {}, read = {}, getResponseStatus = {}, getResponseHeaders = {},
+    setRequestCallback = CB, setHeadersReadCallback = CB, setRequestCompleteCallback = CB,
+    setConnectionClosedCallback = CB,
+}
+
+-- picocalc.tcp.new's socket (l_tcp_methods). The firmware passes the socket
+-- to its callbacks: the program gets its proxy.
+AUDIT.TcpSocket = {
+    connect = {}, write = {}, read = {}, available = {}, close = {}, error = {}, isConnected = {},
+    setConnectTimeout = {}, setInsecure = {}, peerFingerprint = {}, setReadTimeout = {},
+    setConnectCallback = CB, setReadCallback = CB, setCloseCallback = CB,
+    getEvents = {}, waitConnected = {}, waitData = {},
+}
+
+-- display.getBackBuffer's handle (l_fb_methods): it reads the live back
+-- buffer, so the program's is a proxy that does nothing once it is over.
+AUDIT.Framebuffer = { width = {}, height = {}, getPixels = {}, setPixels = {} }
 
 return AUDIT
