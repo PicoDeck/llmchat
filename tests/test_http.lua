@@ -46,6 +46,7 @@ return {
         T.same(got, { "aa", "bb", "cc" })
         T.eq(req.state, "done")
         T.eq(req.status, 200)
+        T.ok(F.made[1].released, "connection freed when done")
         T.eq(F.made[1].host, "api.anthropic.com")
         T.eq(F.made[1].tls, true)
     end,

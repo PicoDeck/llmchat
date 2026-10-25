@@ -51,6 +51,13 @@ function Req:poll()
     elseif rec.done then
         self.state = "done"
     end
+    -- Finished: free the connection slot (the body is already in rec).
+    if self.state == "done" and self.conn then
+        local conn = self.conn
+        self.conn = nil
+        detach(conn)
+        pcall(conn.close, conn)
+    end
 end
 
 -- Body chunks received since the last call (never empty strings).
