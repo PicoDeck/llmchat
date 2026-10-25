@@ -47,6 +47,7 @@ function Chat:open(id)
     if id == nil then
         self.id, self.title, self.items = nil, "", {}
         self.created, self.updated, self.model, self.providerId = nil, nil, nil, nil
+        self.programs, self.lastProgramName, self.clockRetried = nil, nil, false
         self.titlePending, self.longNoted = true, false
         self:_bump()
         return true
@@ -388,6 +389,10 @@ function Chat:_tickReply(now)
             return self:_finishFailed("The clock isn't set yet; try again in a moment.")
         end
         self.clockRetried = false
+        if req.status and req.status ~= 200 then
+            local body = table.concat(self.errBody or {})
+            return self:_finishFailed(self.reqProv.describeError(self.deps.pc.json, req.status, body, req.retryAfter))
+        end
         if req.status then return self:_finishFailed(LOST_NOTE) end
         return self:_finishFailed(err)
     elseif req.state == "done" then

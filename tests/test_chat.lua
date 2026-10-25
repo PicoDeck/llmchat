@@ -457,5 +457,55 @@ return {
         T.eq(#c2.items, 2)
         T.eq(c2.title, chat.title)
         T.eq(c2:open("nope"), false)
+        -- a new chat after a saved one carries nothing over
+        c2:open(id)
+        c2.programs = { dice = true }
+        c2.lastProgramName = "dice"
+        c2.longNoted = true
+        c2:open(nil)
+        T.eq(c2.programs, nil)
+        T.eq(c2.lastProgramName, nil)
+        T.eq(c2.id, nil)
+        T.eq(c2.title, "")
+        T.eq(#c2.items, 0)
+        T.eq(c2.longNoted, false)
+        T.eq(c2.created, nil)
+        T.eq(c2.model, nil)
+    end,
+
+    prompt_edges = function()
+        local none = function() return nil end
+        T.eq(Prompt.build(none, "be brief"), "The user's instructions:\nbe brief")
+        T.eq(Prompt.build(function(n) return n == "system.txt" and "SYS" or nil end, " \n\t "), "SYS")
+        T.eq(Prompt.build(none, "   "), "")
+        T.eq(Prompt.build(function(n) return n == "system.txt" and "SYS" or nil end, "x"),
+            "SYS\n\nThe user's instructions:\nx")
+    end,
+
+    failed_error_reply_described = function()
+        local F, chat = setup({})
+        local _, body = Fixture.read("claude-401.json")
+        local half = #body // 2
+        F.responder = function() return 401, {}, { body:sub(1, half), body:sub(half + 1) } end
+        chat:open(nil)
+        chat:send("hi")
+        local cut = false
+        for _ = 1, 100 do
+            F.ms = F.ms + 100
+            F.service()
+            chat:tick(F.ms)
+            local c = F.made[1]
+            if not cut and c.status and c.buf ~= "" and not c.released then
+                cut = true
+                c.err = "read timeout"
+                c.cb.done = nil
+                if c.cb.closed then c.cb.closed() end
+                c.released = true
+            end
+            if chat.state == "idle" then break end
+        end
+        T.ok(cut, "connection cut mid-body")
+        T.ok(hasNote(chat, "Claude rejected the API key."), "provider error shown")
+        T.ok(not hasNote(chat, "Connection lost"))
     end,
 }

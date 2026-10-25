@@ -9,11 +9,10 @@ function Prompt.build(read, instructions)
         local text = read(name)
         if type(text) == "string" and text ~= "" then parts[#parts + 1] = text end
     end
-    local out = table.concat(parts, "\n\n")
-    if type(instructions) == "string" and instructions ~= "" then
-        out = out .. "\n\nThe user's instructions:\n" .. instructions
+    if type(instructions) == "string" and instructions:find("%S") then
+        parts[#parts + 1] = "The user's instructions:\n" .. instructions
     end
-    return out
+    return table.concat(parts, "\n\n")
 end
 
 return Prompt
