@@ -73,7 +73,7 @@ This is everything a program gets. The global `picocalc` holds modules; use `loc
 - `picocalc.ui.drawProgress(x, y, w, h, progress [, fillColor])` takes progress from 0 to 1.
 - `picocalc.ui.drawCheckbox(x, y, checked, focused)`, `picocalc.ui.drawRadio(x, y, selected, focused)`, `picocalc.ui.drawDivider(x, y, w [, color])`.
 - `picocalc.ui.drawSpinner(cx, cy [, radius [, frame]])`, `picocalc.ui.drawToast(y, text [, bgColor])`.
-- `picocalc.ui.wrapText(text, maxCols)` splits text into lines.
+- `picocalc.ui.wrapText(text, maxCols)` word-wraps and returns two values, `segs, rows`: `segs` is a table of 0-based byte offsets where each line starts, `rows` is the line count. Line k is `text:sub(segs[k] + 1, (segs[k+1] or #text))` (it may end in a space or newline; trim it).
 - `picocalc.ui.confirm(message)` asks yes or no and returns true or false.
 - `picocalc.ui.textInput([prompt] [, default])` asks for a line of text (up to 128 characters) and returns it, or nil if cancelled.
 - `picocalc.ui.toast(text [, style])` shows a short message for a few seconds.
