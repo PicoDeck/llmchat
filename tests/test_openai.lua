@@ -166,4 +166,13 @@ return {
         T.ok(P.describeError(J, 503, ""):find("^OpenAI is busy; try again%."))
         T.eq(P.describeError(J, 418, ""), "OpenAI: HTTP 418.")
     end,
+    -- spec 6.4 (final review I3): every 5xx is busy, 502 and 504 included
+    describe_every_5xx_busy = function()
+        for _, status in ipairs({ 500, 501, 502, 503, 504, 529, 599 }) do
+            T.eq(P.describeError(J, status, ""), "OpenAI is busy; try again.", tostring(status))
+        end
+        T.ok(P.describeError(J, 502, '{"error":{"message":"bad gateway"}}'):find("\nbad gateway$"))
+        T.eq(P.describeError(J, 499, ""), "OpenAI: HTTP 499.")
+        T.eq(P.describeError(J, 600, ""), "OpenAI: HTTP 600.")
+    end,
 }

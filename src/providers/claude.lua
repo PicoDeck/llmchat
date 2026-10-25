@@ -204,7 +204,7 @@ function P.describeError(json, status, body, retryAfter)
     elseif status == 429 then
         text = "Rate limited; try again in a moment."
         if retryAfter then text = text .. " (" .. tostring(retryAfter) .. " s)" end
-    elseif status == 500 or status == 503 or status == 529 then
+    elseif type(status) == "number" and status >= 500 and status <= 599 then -- 5xx, 529 overloaded included (spec 6.4)
         text = "Claude is busy; try again."
     else
         text = "Claude: HTTP " .. tostring(status) .. "."

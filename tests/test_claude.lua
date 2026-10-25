@@ -144,6 +144,16 @@ return {
     refusal_stop = function()
         T.eq(run("claude-refusal.hand.sse").done.stop, "refusal")
     end,
+    -- spec 6.4 (final review I3): every 5xx is busy, 502 and 504 included
+    describe_every_5xx_busy = function()
+        for _, status in ipairs({ 500, 501, 502, 503, 504, 529, 599 }) do
+            T.eq(P.describeError(J, status, ""), "Claude is busy; try again.", tostring(status))
+        end
+        local body = '{"type":"error","error":{"type":"api_error","message":"bad gateway"}}'
+        T.ok(P.describeError(J, 504, body):find("\nbad gateway$"))
+        T.eq(P.describeError(J, 499, ""), "Claude: HTTP 499.")
+        T.eq(P.describeError(J, 600, ""), "Claude: HTTP 600.")
+    end,
     error_event = function()
         local r = run("claude-error.hand.sse")
         T.same(r.errors, { "Overloaded" })
