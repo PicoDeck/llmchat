@@ -21,6 +21,9 @@
 --   run.exited    true once the program called sys.exit()
 --   run.over      the run-over gate: false while the program runs, true from
 --                 the moment it is over (below)
+--   run.unwound   true once the program's xpcall has returned: its stack has
+--                 unwound and its <close> handlers have run. Until then Stop
+--                 program can raise, the gate closed or not
 --   run.STOP      this run's own sentinel: sys.exit() and Stop program raise
 --                 it (a fresh table for every run)
 --   run.ok, run.err  the program's outcome, recorded by execute inside the
@@ -123,13 +126,23 @@
 --         grids, terminals, cameras, meshes, crypto contexts) are not gated.
 --         None of them can arm a callback (the firmware keeps Lua callbacks
 --         only for menu items, sound players, HTTP and TCP: every luaL_ref in
---         lua_bridge_*.c), and only program code can call them, and none runs
---         after the gate. The few instructions between the program's last
---         one and the gate are still the run: a callback the firmware fires
---         there has the program's capabilities, as during the run (spec
---         9.7). A program that catches the stop with its own pcall keeps
---         running, and keeps its capabilities, until it ends (spec 9.7; Exit
---         App is the fallback).
+--         lua_bridge_*.c), and only program code can call them. The only
+--         program code that runs after the gate is the program's <close>
+--         handlers: Lua runs them as its stack unwinds, after onError has
+--         closed the gate and before xpcall returns. They can use those
+--         methods (draw on the program's screen, before the chat redraws it)
+--         and nothing else, and Stop program raises until xpcall returns
+--         (run.unwound), ending the one running. A memory error skips
+--         onError, so they then run before the gate closes, as part of the
+--         run. The few instructions between the program's last one and the
+--         gate are still the run: a callback the firmware fires there has the
+--         program's capabilities, as during the run (spec 9.7).
+--       - A program can still ignore the stop (spec 9.7; Exit App is the
+--         fallback). One that catches it (its own pcall or xpcall, a
+--         coroutine, a reader function it gives load) keeps running, and
+--         keeps its capabilities, until it ends. One whose <close> handlers
+--         each declare another <close> variable before they loop gets a new
+--         handler for every Stop, which ends only the one running.
 --   - The app's own requests: App:runProgram refuses to run while a reply is
 --     arriving (9.2), and cancels a pending title request first.
 local AUDIT = require("src.sandbox_api")
@@ -1179,9 +1192,11 @@ end
 -- fires right after the program's last instruction finds it closed, and one
 -- that raises right after xpcall returns can't lose the outcome. Memory
 -- errors skip the handler: the gate then closes as xpcall returns, and the
--- outcome comes from xpcall.
+-- outcome comes from xpcall. run.unwound is set the moment xpcall returns:
+-- the program's <close> handlers have all run, and Stop program is inert.
 local function runThenShut(pc, run, main, onError)
     local ok, err = _xpcall(main, onError)
+    run.unwound = true
     run.over = true
     shut(pc, run)
     run.active = false
@@ -1220,21 +1235,32 @@ function Sandbox.execute(pc, run, src)
     run.saved = { font = d.getFont and d.getFont() or d.FONT_6X8 }
     blank(d)
     -- "Stop program" (spec 9.5): the callback ends the program by raising
-    -- the run's STOP, but only while it runs; the item is in run.appMenu so
-    -- the program's own clearMenuItems puts it back.
+    -- the run's STOP, until its xpcall returns (run.unwound); the item is in
+    -- run.appMenu so the program's own clearMenuItems puts it back. While the
+    -- gate is open, that stops the program. Once it is closed, the program's
+    -- <close> handlers can still run, as its stack unwinds (below): Stop
+    -- raises to end the one running, and the outcome stays as recorded. It
+    -- does nothing in the few instructions between the gate and the outcome,
+    -- which are the runner's own, and nothing once xpcall has returned, so it
+    -- never raises into the chat.
     local item = { label = "Stop program" }
     function item.fn()
-        if run.active and not run.over then
+        if not run.active or run.unwound then return end
+        if not run.over then
             run.stopping = true
-            _error(run.STOP, 0)
+        elseif run.ok == nil then
+            return
         end
+        _error(run.STOP, 0)
     end
     run.appMenu[#run.appMenu + 1] = item
     sys.addMenuItem(item.label, item.fn)
     -- The gate closes the moment the program is over: as its main chunk
-    -- returns, or as its error reaches the runner (onError runs before the
+    -- returns, or as its error reaches the runner. onError runs before the
     -- stack unwinds, so the program's own __close handlers, which run while
-    -- it unwinds, already find it closed).
+    -- it unwinds, already find it closed; Lua calls onError again for an
+    -- error one of them raises (a Stop included), and the first outcome
+    -- stays.
     local function main()
         fn()
         run.over = true
@@ -1243,7 +1269,7 @@ function Sandbox.execute(pc, run, src)
     local function onError(e)
         run.over = true
         local v = handler(run, e)
-        run.ok, run.err = false, v
+        if run.ok == nil then run.ok, run.err = false, v end
         return v
     end
     local t0 = sys.getTimeMs()

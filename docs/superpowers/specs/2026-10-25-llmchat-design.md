@@ -516,7 +516,8 @@ Please send a fixed version of the whole program.
 This is a fence, not a wall:
 - A program shares the chat's Lua heap.
 - It can still draw over the screen, play sound, or use the network with the chat's `http` permission.
-- A program written to catch errors can ignore "Stop program".
+- A program written to catch errors can ignore "Stop program": its own `pcall` or `xpcall`, `coroutine.resume`, a `load` reader, and the firmware's protected calls of network, sound and progress callbacks all catch the stop.
+- So can a program whose `<close>` handlers each declare another `<close>` variable before they loop. Lua runs every pending handler as the stack unwinds, catching each one's error, so each Stop ends only the handler that is running (Stop raises until the run's `xpcall` returns, so one looping handler ends after one Stop).
 
 The real wall would be a firmware feature: run a program as its own app in its own VM, then return to the chat. The OS would do the full teardown. That fits the later "turn a program into an app" step, so it is out of scope here.
 

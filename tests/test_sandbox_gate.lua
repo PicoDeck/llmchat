@@ -476,6 +476,83 @@ return {
         T.eq(r.status, "exit")
     end,
 
+    -- Stop raises until the run's xpcall returns: chosen unprotected, as the
+    -- firmware runs it, at any one of the runner's instructions once the gate
+    -- is closed, it never raises out of execute and never changes the outcome.
+    stop_after_the_gate_stays_in_the_run = function()
+        for src, want in pairs({ ["return 1"] = "ended", ["error('boom')"] = "error",
+                                 ["picocalc.sys.exit()"] = "exit" }) do
+            for n = 1, 60 do
+                local F = Fake.new()
+                local run = Sandbox.newRun(F.pc, context())
+                local seen = 0
+                debug.sethook(function()
+                    if not run.over or seen > n then return end
+                    local info = debug.getinfo(2, "S")
+                    if not (info and info.source:find("sandbox.lua", 1, true)) then return end
+                    seen = seen + 1
+                    local stop = F.menu["Stop program"]
+                    if seen == n and stop then stop() end
+                end, "", 1)
+                local ok, r = pcall(Sandbox.execute, F.pc, run, src)
+                debug.sethook()
+                T.ok(ok, src .. ": Stop at instruction " .. n .. " raised out of execute")
+                T.eq(r.status, want, src .. ": Stop at instruction " .. n)
+            end
+        end
+    end,
+
+    -- A program's <close> handler runs while its stack unwinds, after the
+    -- gate has closed: one that loops ends after one Stop, whether an error
+    -- or a Stop reached it, and the outcome stays the error that ended the
+    -- program. It reaches nothing (the reviewer's probe_close.lua). A count
+    -- hook stands in for the firmware's service pass: while the program says
+    -- it loops, it chooses Stop unprotected, as the firmware runs a menu item;
+    -- after 5 tries a guard ends the loop, so a Stop that can't raise fails
+    -- the test instead of hanging it.
+    close_handler_ends_after_one_stop = function()
+        for _, ending in ipairs({ "error('boom')", "LOOPING('main'); while true do end" }) do
+            local F = Fake.new()
+            local run = Sandbox.newRun(F.pc, context())
+            local looping, tries, guarded = nil, {}, nil
+            run.env.LOOPING = function(where) looping = where end
+            debug.sethook(function()
+                local where = looping
+                if not where then return end
+                tries[where] = (tries[where] or 0) + 1
+                if tries[where] > 5 then
+                    looping, guarded = nil, where
+                    error("the guard ended the " .. where .. " loop", 0)
+                end
+                local stop = F.menu["Stop program"]
+                if stop then
+                    looping = nil
+                    stop() -- raises into the loop, as from the firmware's hook
+                    looping = where
+                end
+            end, "", 1000)
+            local r = Sandbox.execute(F.pc, run, [[
+                local x <close> = setmetatable({}, { __close = function()
+                    picocalc.sys.log("in close")
+                    LOOPING("close")
+                    while true do end
+                end })
+            ]] .. ending)
+            debug.sethook()
+            T.eq(guarded, nil, ending .. ": Stop never ended the " .. tostring(guarded) .. " loop")
+            T.eq(tries.close, 1, ending .. ": Stop chosen in the close handler")
+            if ending:find("boom", 1, true) then
+                T.eq(r.status, "error")
+                T.ok(r.err:find("dice.lua:6: boom", 1, true), r.err)
+            else
+                T.eq(tries.main, 1, "Stop chosen in the main loop")
+                T.eq(r.status, "stopped", r.err)
+            end
+            T.ok(not F.hasLog("in close"), ending .. ": the close handler reached the firmware")
+            T.ok(pcall(F.menu["Stop program"] or function() end), "Stop raises after the run")
+        end
+    end,
+
     -- cleanup's release repeats until nothing is tracked: an object added
     -- while it releases (nothing can be, once the gate is closed; this is
     -- the backstop) is released too.
