@@ -1,0 +1,11 @@
+{
+  "id": "net.picodeck.llmchat",
+  "name": "LLM Chat",
+  "description": "Chat with Claude and OpenAI models, and have them write Lua programs you can run on the spot.",
+  "version": "2.0.0",
+  "author": "PicoDeck",
+  "category": "network",
+  "requirements": ["http"],
+  "homepage": "https://github.com/PicoDeck/llmchat",
+  "min_firmware": "0.2.0"
+}

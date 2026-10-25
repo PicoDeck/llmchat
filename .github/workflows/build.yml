@@ -1,0 +1,51 @@
+name: Build
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unit tests
+        run: |
+          sudo apt-get install -y lua5.4 > /dev/null
+          lua5.4 tests/run.lua
+
+      - name: Package
+        run: |
+          rm -f picodeck-llmchat-*.zip
+          files="app.json main.lua fonts src"
+          for f in icon.png prompt; do [ -e "$f" ] && files="$files $f"; done
+          zip -9 -r "picodeck-llmchat-${GITHUB_REF_NAME//\//-}.zip" $files
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: picodeck-llmchat
+          path: picodeck-llmchat-*.zip
+
+      - name: Check app.json version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VER="$(python3 -c 'import json; print(json.load(open("app.json"))["version"])')"
+          if [ "$VER" != "$TAG" ]; then
+            echo "app.json version '$VER' does not match tag '$TAG'" >&2
+            exit 1
+          fi
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: picodeck-llmchat-*.zip
+          generate_release_notes: true
