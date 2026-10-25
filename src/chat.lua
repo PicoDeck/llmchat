@@ -275,23 +275,32 @@ function Chat:stop()
 end
 
 -- Saves the programs in a reply (spec 9.1). A stopped reply keeps only blocks
--- whose fence closed. Sets item.programs, self.programs, self.lastProgramName.
+-- whose fence closed. item.programs lists the reply's lua code blocks in order:
+-- the saved name, or false for a block that isn't a saved program (omitted when
+-- none was saved). Also sets self.programs and self.lastProgramName.
 function Chat:_savePrograms(item, closedOnly)
     local progs = self.deps.programs
     if not progs or item.text == "" then return end
-    local list = Programs.extract(item.text, closedOnly)
+    local list, nBlocks = Programs.extract(item.text, closedOnly)
     if #list == 0 then return end
     local clock = self:_clock()
     if not self.id then self.id = self.deps.store:newId(clock) end
-    local names = progs:save(self.id, list, clock.synced and clock.epoch or nil)
-    if #names == 0 then return end
-    item.programs = names
-    self.lastProgramName = names[#names]
+    local saved, err = progs:save(self.id, list, clock.synced and clock.epoch or nil)
+    if err then self:_push("error", "Couldn't save program: " .. tostring(err), true) end
+    local per, last = {}, nil
+    for i = 1, nBlocks do per[i] = false end
     local all, have = {}, {}
     for _, n in ipairs(self.programs or {}) do all[#all + 1] = n; have[n] = true end
-    for _, n in ipairs(names) do
-        if not have[n] then all[#all + 1] = n; have[n] = true end
+    for i, p in ipairs(list) do
+        local name = saved[i]
+        if name then
+            per[p.block], last = name, name
+            if not have[name] then all[#all + 1] = name; have[name] = true end
+        end
     end
+    if not last then return end
+    item.programs = per
+    self.lastProgramName = last
     self.programs = all
 end
 

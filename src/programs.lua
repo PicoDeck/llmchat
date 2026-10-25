@@ -14,21 +14,24 @@ local function cleanStem(raw)
     return s:sub(1, Programs.MAX_STEM)
 end
 
--- text -> { {name, code}, ... }. closedOnly drops a block whose fence never
--- closed (a reply stopped half way).
+-- text -> { {name, code, block}, ... }, number of lua code blocks. block is
+-- the program's place among the reply's lua blocks (Layout's mapping).
+-- closedOnly drops a block whose fence never closed (a reply stopped half way).
 function Programs.extract(text, closedOnly)
-    local out = {}
+    local out, n = {}, 0
     for _, b in ipairs(Markdown.parse(text or "")) do
-        if b.kind == "code" and b.info:lower():match("^lua") and b.lines[1]
-            and (b.closed or not closedOnly) then
-            local raw = b.lines[1]:match("^%-%-%s*(.-)%.lua")
-            local stem = raw and cleanStem(raw) or ""
-            if stem ~= "" then
-                out[#out + 1] = { name = stem .. ".lua", code = table.concat(b.lines, "\n") .. "\n" }
+        if b.kind == "code" and b.info:lower():match("^lua") then
+            n = n + 1
+            if b.lines[1] and (b.closed or not closedOnly) then
+                local raw = b.lines[1]:match("^%-%-%s*(.-)%.lua")
+                local stem = raw and cleanStem(raw) or ""
+                if stem ~= "" then
+                    out[#out + 1] = { name = stem .. ".lua", code = table.concat(b.lines, "\n") .. "\n", block = n }
+                end
             end
         end
     end
-    return out
+    return out, n
 end
 
 local function validName(name)
@@ -77,24 +80,39 @@ local function pick(idx, chatId, name)
 end
 
 -- list: {{name, code}}; now: epoch seconds or nil (unsynced clock).
--- Returns the saved names (in order, without repeats).
+-- Returns saved, err: saved[i] is the name list[i] was saved as, or false when
+-- it could not be saved (err says why). The index is written once; if that
+-- fails the in-memory index is put back and nothing counts as saved.
 function Programs:save(chatId, list, now)
     local idx, store = self:_index(), self.store
-    local names, seen = {}, {}
-    for _, p in ipairs(list or {}) do
+    local saved, undo, err = {}, {}, nil
+    for i, p in ipairs(list or {}) do
+        saved[i] = false
         local name, own = pick(idx, chatId, p.name)
         local rel = "programs/" .. name
+        local ok, e = true, nil
         if own then
             local old = store:readText(rel)
-            if old then store:writeText(rel .. ".prev", old) end
+            if old then ok, e = store:writeText(rel .. ".prev", old) end
         end
-        if store:writeText(rel, p.code) then
+        if ok then ok, e = store:writeText(rel, p.code) end
+        if ok then
+            if undo[name] == nil then undo[name] = { old = idx[name] or false } end
             idx[name] = { chat = chatId, size = #p.code, updated = now or (newest(idx) + 1) }
-            if not seen[name] then seen[name] = true; names[#names + 1] = name end
+            saved[i] = name
+        else
+            err = err or e or "write failed"
         end
     end
-    if #names > 0 then self:_flush() end
-    return names
+    if next(undo) ~= nil then
+        local ok, e = self:_flush()
+        if not ok then
+            for name, u in pairs(undo) do idx[name] = u.old or nil end
+            for i in ipairs(saved) do saved[i] = false end
+            err = e or "index save failed"
+        end
+    end
+    return saved, err
 end
 
 -- Newest first: { {name, chat = title|nil, chatId, size, updated}, ... }
@@ -127,6 +145,7 @@ function Programs:delete(name)
     local fs = self.store.fs
     pcall(fs.delete, self.store:path("programs/" .. name))
     pcall(fs.delete, self.store:path("programs/" .. name .. ".prev"))
+    if fs.deleteRecursive then pcall(fs.deleteRecursive, self:dataDir(name)) end
     if idx[name] then
         idx[name] = nil
         return self:_flush()
@@ -134,19 +153,29 @@ function Programs:delete(name)
     return true
 end
 
+-- true | nil, err. On a failed index save the change is undone in memory.
 function Programs:orphan(chatId)
-    local changed = false
-    for _, e in pairs(self:_index()) do
-        if chatId ~= nil and e.chat == chatId then e.chat, changed = nil, true end
+    if chatId == nil then return true end
+    local changed = {}
+    for name, e in pairs(self:_index()) do
+        if e.chat == chatId then changed[#changed + 1] = name; e.chat = nil end
     end
-    if changed then self:_flush() end
+    if #changed == 0 then return true end
+    local ok, err = self:_flush()
+    if not ok then
+        for _, name in ipairs(changed) do self._idx[name].chat = chatId end
+        return nil, err
+    end
+    return true
 end
 
 function Programs:adopt(name, chatId)
     local e = self:_index()[name]
-    if not e then return false end
+    if not e then return nil, "no such program" end
+    local was = e.chat
     e.chat = chatId
-    self:_flush()
+    local ok, err = self:_flush()
+    if not ok then e.chat = was; return nil, err end
     return true
 end
 

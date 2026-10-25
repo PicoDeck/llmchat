@@ -115,13 +115,6 @@ local function programName(block)
     return first and first:match("^%-%-%s*([%w_%-%.]+%.lua)%s*$") or nil
 end
 
-local function has(list, name)
-    for _, v in ipairs(list or {}) do
-        if v == name then return true end
-    end
-    return false
-end
-
 -- blocks (markdown.parse) to rows, height. width: the text column (296);
 -- programs: saved program names, for a code panel's action row.
 function M.assistant(blocks, spec, width, programs)
@@ -133,9 +126,16 @@ function M.assistant(blocks, spec, width, programs)
         rows[#rows + 1] = row
         return row
     end
+    local luaN = 0
     for bi, b in ipairs(blocks) do
         if bi > 1 then y = y + GAP end
         local k = b.kind
+        local saved
+        if k == "code" and b.info:lower():match("^lua") then
+            luaN = luaN + 1
+            saved = type(programs) == "table" and programs[luaN] or nil
+            if type(saved) ~= "string" then saved = nil end
+        end
         if k == "p" or k == "h" or k == "quote" or k == "li" then
             local indent, w = 0, width
             local bx, label
@@ -190,7 +190,7 @@ function M.assistant(blocks, spec, width, programs)
             if k == "code" then
                 if #b.lines == 0 then add({ h = code.rowH, kind = "panel", px = LEFT, pw = width }) end
                 add({ h = PANEL_BOTTOM, kind = "panel-bottom", px = LEFT, pw = width })
-                if name and has(programs, name) then
+                if saved then
                     local capW = measure("F3", spec.adv) + 8
                     local runX = LEFT + capW + 6
                     local savedX = runX + measure("Run", spec.adv) + 8
@@ -199,7 +199,7 @@ function M.assistant(blocks, spec, width, programs)
                         segs = {
                             { x = LEFT, text = "F3", face = "regular", color = "title", cap = true, w = capW },
                             { x = runX, text = "Run", face = "regular", color = "fg" },
-                            { x = savedX, text = "saved as " .. name, face = "regular", color = "dim" },
+                            { x = savedX, text = "saved as " .. saved, face = "regular", color = "dim" },
                         },
                     })
                 end

@@ -112,6 +112,21 @@ return {
         local none = Layout.assistant(blocks, s, 296, {})
         T.ok(none[#none].kind ~= "action")
     end,
+    action_line_follows_saved_names = function()
+        local s = spec()
+        local function actions(text, programs)
+            local out = {}
+            for _, r in ipairs(Layout.assistant(MD.parse(text), s, 296, programs)) do
+                if r.kind == "action" then out[#out + 1] = r.segs[3].text end
+            end
+            return out
+        end
+        T.same(actions("```lua\n-- Dice.lua: rolls\nx=1\n```", { "dice.lua" }), { "saved as dice.lua" })
+        T.same(actions("```lua\n-- dice.lua\nx=1\n```", { "dice-2.lua" }), { "saved as dice-2.lua" })
+        local two = "```lua\nx=1\n```\ntext\n```lua\n-- b.lua\ny=2\n```"
+        T.same(actions(two, { false, "b.lua" }), { "saved as b.lua" })
+        T.same(actions(two, {}), {})
+    end,
     bullets = function()
         local s = spec()
         local rows = Layout.assistant(MD.parse("- one\n  - two\n1. three"), s, 296, {})

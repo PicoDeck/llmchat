@@ -27,6 +27,16 @@ function M.fs()
         files[p] = nil
         return true
     end
+    function fs.deleteRecursive(p)
+        local pre = p .. "/"
+        for k in pairs(files) do
+            if k == p or k:sub(1, #pre) == pre then files[k] = nil end
+        end
+        for k in pairs(dirs) do
+            if k == p or k:sub(1, #pre) == pre then dirs[k] = nil end
+        end
+        return true
+    end
     function fs.rename(a, b)
         if fs.failRename or files[a] == nil or files[b] ~= nil then return false, "rename failed" end
         files[b], files[a] = files[a], nil

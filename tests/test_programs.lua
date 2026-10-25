@@ -156,7 +156,8 @@ return {
         chat.live.text = fence("-- one.lua") .. "\n```lua\n-- two.lua\nprint(2)"
         chat:stop()
         T.eq(chat.items[2].programs[1], "one.lua")
-        T.eq(#chat.items[2].programs, 1)
+        T.eq(chat.items[2].programs[2], false)
+        T.eq(#chat.items[2].programs, 2)
         T.eq(p:read("two.lua"), nil)
     end,
     chat_delete_keeps_programs = function()
@@ -180,6 +181,83 @@ return {
         app:go("lists", { tab = 2 })
         app:frame()
         T.ok(F.screenText():find("from a deleted chat", 1, true), F.screenText())
+    end,
+    per_block_names_follow_lua_blocks = function()
+        local F, store, p = mk()
+        p:save("other", { { name = "dice.lua", code = "x\n" } })
+        local chat = newChat(F, store, p, "```lua\nprint(0)\n```\n" .. fence("-- Dice.lua: rolls") .. "\n" .. fence("-- b.lua"))
+        chat:send("go")
+        run(F, chat)
+        local pr = chat.items[2].programs
+        T.eq(pr[1], false)
+        T.eq(pr[2], "dice-2.lua")
+        T.eq(pr[3], "b.lua")
+        T.eq(#pr, 3)
+        T.eq(store:loadChat(chat.id).items[2].programs[2], "dice-2.lua")
+        T.eq(chat.programs[1], "dice-2.lua")
+        T.eq(chat:lastProgram(), "b.lua")
+    end,
+    no_saved_program_omits_programs = function()
+        local F, store, p = mk()
+        local chat = newChat(F, store, p, "```lua\nprint(0)\n```")
+        chat:send("go")
+        run(F, chat)
+        T.eq(chat.items[2].programs, nil)
+        T.eq(chat.programs, nil)
+    end,
+    prev_write_failure_keeps_original = function()
+        local F, store, p = mk()
+        p:save("A", { { name = "dice.lua", code = "old\n" } })
+        local open = F.pc.fs.open
+        F.pc.fs.open = function(path, mode)
+            if path:find("%.prev") then return nil, "disk full" end
+            return open(path, mode)
+        end
+        local saved, err = p:save("A", { { name = "dice.lua", code = "new\n" } })
+        T.eq(saved[1], false)
+        T.ok(err and err:find("prev", 1, true), err)
+        T.eq(p:read("dice.lua"), "old\n")
+    end,
+    index_failure_reverts_and_reports = function()
+        local F, store, p = mk()
+        p:save("A", { { name = "dice.lua", code = "old\n" } }, 10)
+        local open = F.pc.fs.open
+        F.pc.fs.open = function(path, mode)
+            if path:find("programs/index.json", 1, true) then return nil, "disk full" end
+            return open(path, mode)
+        end
+        local saved, err = p:save("A", { { name = "new.lua", code = "n\n" }, { name = "dice.lua", code = "d\n" } }, 20)
+        T.eq(saved[1], false)
+        T.eq(saved[2], false)
+        T.ok(err)
+        local rows = p:list()
+        T.eq(#rows, 1)
+        T.eq(rows[1].name, "dice.lua")
+        T.eq(rows[1].updated, 10)
+        local ok = p:orphan("A")
+        T.eq(ok, nil)
+        T.eq(p:list()[1].chatId, nil) -- no chat "A" in the store anyway
+        T.eq(p:_index()["dice.lua"].chat, "A")
+        T.eq(p:adopt("dice.lua", "Z"), nil)
+        T.eq(p:_index()["dice.lua"].chat, "A")
+        -- the chat turns the failure into a note
+        local chat = newChat(F, store, p, fence("-- w.lua"))
+        chat:send("go")
+        run(F, chat)
+        local last = chat.items[#chat.items]
+        T.ok(last.text:find("Couldn't save program: ", 1, true), last.text)
+        T.eq(chat.items[2].programs, nil)
+    end,
+    delete_removes_data_folder = function()
+        local F, store, p = mk()
+        p:save("A", { { name = "dice.lua", code = "a\n" } })
+        local dir = p:dataDir("dice.lua")
+        F.pc.fs.mkdir(dir)
+        store:writeText("programs/dice.data/score.txt", "9")
+        T.ok(F.pc.fs.exists(dir .. "/score.txt"))
+        p:delete("dice.lua")
+        T.ok(not F.pc.fs.exists(dir .. "/score.txt"))
+        T.ok(not F.pc.fs.exists(dir))
     end,
     cap_eviction_orphans_programs = function()
         local F, store, p = mk()

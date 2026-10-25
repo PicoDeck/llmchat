@@ -120,15 +120,15 @@ end
 -- Rows for one stored item, cached while its text and the font stay as they were.
 function S:entryFor(it, spec)
     local c = self.cache[it]
-    if c and c.spec == spec and c.programs == self.chat.programs then return c end
-    local e = { spec = spec, programs = self.chat.programs }
+    if c and c.spec == spec and c.programs == it.programs then return c end
+    local e = { spec = spec, programs = it.programs }
     if it.role == "user" then
         e.kind = "user"
         e.rows, e.w, e.h = Layout.user(it.text or "", spec, USER_MAXW)
     elseif it.role == "assistant" then
         e.kind = "assistant"
         e.provider = it.provider
-        e.rows, e.h = Layout.assistant(Markdown.parse(it.text or ""), spec, TEXT_W, self.chat.programs)
+        e.rows, e.h = Layout.assistant(Markdown.parse(it.text or ""), spec, TEXT_W, it.programs)
         if #e.rows == 0 then e = nil end
     else
         e.kind = "note"
@@ -154,7 +154,7 @@ end
 -- outside an open code fence is parsed and laid out once and kept; only the
 -- tail after it is laid out again on each bump.
 function S:liveRows(text, spec)
-    local live, programs = self.chat.live, self.chat.programs
+    local live, programs = self.chat.live, nil
     local st = self.liveState
     if not st or st.live ~= live or st.spec ~= spec or st.programs ~= programs then
         st = { live = live, spec = spec, programs = programs, rows = {}, h = 0, split = 1, scanned = 1, fence = false }
