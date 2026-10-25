@@ -1,0 +1,601 @@
+# LLM Chat 2.0: design
+
+Date: 2026-10-25. Status: reviewed by a builder check, with the owner's answers to its questions included. Waiting for the owner's approval.
+
+A rewrite of PicoDeck's **LLM Chat** app. It chats with Claude and OpenAI models, streams replies, keeps recent chats, and can have the model write small Lua programs that run on the spot, inside a sandbox, without leaving the app. It moves out of the `picodeck` repo into its own repo, like PicoSurf and BRICK-15, so it ships through the App Store on its own.
+
+Mockups of every screen, drawn by the real firmware in the simulator, are in [`docs/mockups/`](../../mockups/). The owner reviewed them and said "Everything looks good".
+
+Decisions are tagged two ways throughout. **Owner:** the owner decided it in conversation. **Call:** the author of this document chose it, and the owner can still overrule it.
+
+---
+
+## 1. Why
+
+The current app (`picodeck/apps/llmchat/main.lua`, 571 lines, from the PicOS days) is out of date:
+- It parses JSON by hand and waits for a whole reply before showing any of it.
+- It defaults to models from 2024. Its Claude default, `claude-3-haiku-20240307`, was retired on 2026-04-20.
+- Its Claude path can't work: it sends no `max_tokens`, and it puts the system prompt in `messages` with role `system`.
+- It saves five settings in `picocalc.config`, which holds four (`APPCONFIG_MAX_ENTRIES`), so one is lost silently.
+- It draws plain 6x8 text with no word wrap aware of fonts, and it scrolls by hand-counted lines.
+
+The owner wants it rebuilt on the current SDK and UI pieces, OpenAI kept, Claude added as a working option, and a way to make Lua programs on the device. **Owner:** nothing from the old app has to be kept.
+
+## 2. Goals, non-goals, anti-goals
+
+**Goals**
+1. A quick question is fast. The app opens on a fresh chat with the cursor in the compose box. The reply streams in word by word. (**Owner:** usage is mostly quick questions, sometimes a longer back-and-forth.)
+2. Two providers: Claude (Anthropic Messages API) and OpenAI. **Owner.**
+3. Recent chats are kept on the SD card, in a list you can reopen and carry on from. **Owner.**
+4. When the model writes a Lua program, it is saved as a file you can run from inside the app. **Owner:** a file runnable from this app is enough for now.
+5. A program that crashes, hangs or calls `sys.exit()` never takes the chat app down with it. **Owner.**
+6. The app lives in its own repo and installs from the App Store. **Owner.**
+
+**Non-goals (this version)**
+- Turning a program into a launcher app. **Owner:** that's a later step.
+- Multi-file programs, programs with assets, programs that `require` modules.
+- Images, files or voice in chats. Tool use or web search by the model.
+- OpenAI-compatible local servers (Ollama, LM Studio). The old app had an Ollama option. **Call:** dropped, because the owner asked for OpenAI and Claude, and OpenAI's current API isn't what those servers speak (6.3). It could come back later as a third provider using Chat Completions.
+- Conversation sync or export.
+- A fully isolated program runner, which would need a firmware feature (section 9.7).
+
+**Anti-goals**: it fails even if it works when...
+- The model's program can read your API keys or chats. Programs run inside the chat app's process, so this has to be designed out, not hoped away (section 9.3).
+- A quick question feels slow because of the app: a long startup, a modal dialog in the way, or a lag before the first words appear that isn't the model thinking.
+- Anything needs Tab. The owner finds Tab awkward on the PicoCalc keyboard. (Known from PicoSurf, where it came up.)
+
+## 3. Constraints that shape the design
+
+From the firmware (`picodeck/CLAUDE.md`, `src/os/CLAUDE.md`, `src/drivers/CLAUDE.md`, `docs/`):
+- Lua 5.4 with `base`, `table`, `string`, `math`, `coroutine`, `utf8` only. No `io`, `os`, `debug` or `package`. `load` takes text only. So there is no instruction-count hook for programs (section 9.5).
+- Numbers: 32-bit integers, `float` numbers (integers exact to 2^24). Host tests must also run under a 32-bit Lua build (section 11).
+- `picocalc.config` holds at most 4 keys per app. Do not use it for this app's data (section 8).
+- `ui.textInput` takes at most 128 characters, and API keys are 100-200 characters. Use the widgets library's text fields and text area instead of modal prompts.
+  - Firmware releases and the store don't install `system/lib/widgets.lua`, so the app ships its own copy as `src/widgets.lua` and loads it with `require`. The header comment names the `picodeck` commit it was copied from.
+- Every font covers ASCII 0x20-0x7E only. Model output is UTF-8 with curly quotes, dashes, bullets and emoji, so fold it to ASCII before drawing (section 7.3).
+- At most 8 loaded fonts at a time, shared by `display.loadFont` and `graphics.font.new`. The chat uses 2 (Sans, Sans Bold) and leaves 6 for programs.
+- HTTP callbacks run inside the firmware's service pass, *between any two Lua statements*. Callbacks only record what arrived; all parsing happens in the main loop (PicoSurf's `src/http.lua` follows the same rule).
+- The HTTP read timeout is idle-based: it restarts whenever bytes arrive (`http.c`), so a long streamed reply never times out while data keeps coming.
+- HTTPS verifies certificates against an 11-root bundle. **Checked 2026-10-25:** `api.openai.com` and `api.anthropic.com` both chain through Google Trust Services WE1 to **GTS Root R4**, which the bundle has. Cloudflare's other CAs (Let's Encrypt, SSL.com) are in the bundle too. No firmware change is needed.
+- A verified connection waits for SNTP to set the clock. Before that, a request fails with an error starting `clock not set`.
+- `sys.exit()` is sticky: no `pcall` can catch it (`src/os/CLAUDE.md`, "App exit is sticky"). Programs must never reach the real one (section 9.3).
+- FatFS allows 16 open files in total, so every file handle a program opens must be closed after it runs.
+
+## 4. Where it lives
+
+### 4.1 The new repo
+- Local: `~/Projects/PicoDeck/llmchat` (this repo, branch `main`). GitHub: `PicoDeck/llmchat`, with the topic `picodeck-app`. Creating the GitHub repo is outward-facing: get the owner's go-ahead at that step.
+- **Call:** keep the id `net.picodeck.llmchat` and the directory name `llmchat`. Existing installs then keep their data folder (`/data/net.picodeck.llmchat`), and their old API key can be imported (section 8.4).
+- `app.json`:
+  ```json
+  {
+    "id": "net.picodeck.llmchat",
+    "name": "LLM Chat",
+    "description": "Chat with Claude and OpenAI models, and have them write Lua programs you can run on the spot.",
+    "version": "2.0.0",
+    "author": "PicoDeck",
+    "category": "network",
+    "requirements": ["http"],
+    "homepage": "https://github.com/PicoDeck/llmchat",
+    "min_firmware": "<the first release with picocalc.json and system/lib/widgets.lua: the builder looks it up>"
+  }
+  ```
+- Layout, after PicoSurf (`src/` modules, `tests/`, `Makefile`) and BRICK-15 (CI, packaging). **Call:**
+  ```
+  app.json  main.lua  icon.png  README.md  Makefile
+  fonts/        sans.pfn, sans-bold.pfn, LICENSE (copied from PicoSurf)
+  prompt/       system.txt, picodeck-api.md (section 10)
+  src/          app.lua, http.lua, sse.lua, providers/claude.lua, providers/openai.lua,
+                chat.lua, store.lua, keys.lua, markdown.lua, layout.lua, fold.lua,
+                programs.lua, sandbox.lua, widgets.lua (copied: section 3), screens/*.lua
+  tests/        run.lua, fakepc.lua, test_*.lua, e2e/ (pytest + fake API server)
+  tools/        build_lua32.sh (from PicoSurf)
+  .github/workflows/build.yml
+  ```
+- CI (`build.yml`, modelled on BRICK-15's): host tests under `lua5.4` and lua32, then the zip `picodeck-llmchat-<ref>.zip` with `app.json`, `main.lua`, `icon.png`, `fonts/`, `prompt/` and `src/` at the archive root. On a `v*` tag it checks that `app.json`'s version matches the tag and publishes a release with that one zip. The store needs exactly one `.zip` per release, files at the root, at most 16 MB.
+- `icon.png`: **Call:** make one in the style of BRICK-15's and DOOM's.
+- Only Sans and the built-in fonts, no Serif. **Call:** PicoSurf's Serif (Adobe Utopia) has an unresolved licence question about modifying it, and the chat doesn't need a second reading font.
+
+### 4.2 Moving out of `picodeck`
+Following the precedent of `picodeck` commit `ee30cb0` ("move block.exe, C-Dogs and DOOM to their own repos"):
+1. Build and release 2.0.0 from the new repo.
+2. **Store claims.** The store gives an id or directory name to the first repo it indexes with it, and `seed-claims.sh` gave `net.picodeck.llmchat` and `llmchat` to `PicoDeck/picodeck`. Point both claims at the new repo, or the store rejects it as `id-claimed-by:PicoDeck/picodeck`:
+   ```
+   npx wrangler kv key put --binding STORE_KV "claim:net.picodeck.llmchat" "PicoDeck/llmchat"
+   npx wrangler kv key put --binding STORE_KV "claim:dir:llmchat" "PicoDeck/llmchat"
+   ```
+   Then refresh the store. These steps change live services: get the owner's go-ahead first.
+3. In `picodeck`, on a branch off `develop`, delete `apps/llmchat/` in one `chore(apps): move LLM Chat to its own repo` commit. Nothing else in the tree refers to it (checked 2026-10-25: no tests, docs or release packaging mention it).
+
+## 5. Screens and keys
+
+The mockups in `docs/mockups/` are the reference layout:
+
+| File | Screen |
+|---|---|
+| `01-new-chat.png` | A new chat, the app's opening screen |
+| `02-streaming.png` | A reply arriving |
+| `03-long-chat.png` | A longer conversation, scrolled |
+| `04-program.png` | A reply containing a Lua program |
+| `05-program-error.png` | A program that crashed |
+| `06-recent-chats.png` | Recent chats (tab 1) |
+| `07-programs.png` | Saved programs (tab 2) |
+| `08-settings.png` | Settings |
+
+Common to every screen:
+- The header is `ui.drawHeader(title)`, with the clock, WiFi and battery drawn by the firmware.
+- The footer is `ui.drawFooter(keys, model)`.
+- UI chrome uses `FONT_6X8`. Chat text uses Sans (14 px rows); code uses `FONT_SCIENTIFICA` (6x12). After drawing anything in another font, set 6x8 back before the firmware draws its UI (PicoSurf's rule).
+
+### 5.1 Chat screen
+- **Layout.** Conversation area from y 22 to above the compose box. The compose box is a 3-row `W.TextArea` (6x8) at the bottom. Footer at y 302.
+- **Your messages** are right-aligned boxes in blue (`rgb(30,58,104)`), at most 240 px wide.
+- **The model's messages** are left-aligned and full width, with a 2 px bar in the provider's colour: Claude `rgb(217,119,87)`, OpenAI `rgb(16,163,127)`.
+- **A reply arriving.** The spinner (`ui.drawSpinner`, radius 4) sits at the end of the text. While the model thinks before its first word, the reply shows "Thinking..." and the spinner. The view follows the reply, unless you have scrolled up; scrolling back to the bottom resumes following.
+- **The scroll bar** is 2 px wide at the right edge, shown only when the conversation is taller than the view.
+- **Notes** are local lines that are never sent to the model: errors ("Claude: 401, the API key was rejected. Check Settings."), "Reply stopped", "dice.lua ended". They are drawn dim, or red for errors.
+
+| Key | Action |
+|---|---|
+| typing, Left/Right, Backspace, Del | edit the compose box (passed to `W.TextArea`) |
+| Enter | send (nothing when empty; when the last item is an error note and the box is empty, retry) |
+| Shift+Enter | new line in the compose box |
+| Up / Down | scroll the conversation one row (14 px); hold to repeat |
+| Shift+Up / Shift+Down | scroll a page |
+| Esc | while a reply arrives: stop it. Otherwise: quit the app (the unsent text is kept as a draft for this chat) |
+| F1 | Recent chats |
+| F2 | new chat |
+| F3 | run the newest program in this chat (only when one exists and no reply is arriving) |
+| F5 | Settings |
+
+**Call:** Up/Down always scroll the conversation; the compose box's cursor moves with Left/Right only. Messages are short, and scrolling is the frequent action.
+
+### 5.2 Recent chats and programs
+- `ui.drawTabs` with "Chats" and "Programs"; Left/Right switch tabs.
+- Two-line rows, 32 px each, with the selected row on `rgb(40,70,130)`:
+  - Chats: the title in Sans; a 6x8 line with the provider and message count (plus "N programs" when there are any); the age at the right; a provider-colour dot at the left.
+  - Programs: the file name; "from <chat title>" and the size; the age.
+- Chats keys: Enter opens, F2 new chat, Del deletes (after `ui.confirm`), Esc back to the chat.
+- Programs keys: Enter runs, F4 opens the chat that made it, Del deletes (after `ui.confirm`), Esc back.
+- Age format: "2m", "1h", today "14:02", "Yest", weekday within 7 days, then "18 Oct".
+
+### 5.3 Program error screen
+Mockup 05.
+- `ui.drawPanel` titled "Program stopped", with the error message in red (wrapped to 6x8 columns), how long the program ran, and up to the last 5 lines it printed.
+- Buttons "Ask <Claude|OpenAI> to fix" (focused) and "Back to chat".
+- Keys: Left/Right move between the buttons, Enter chooses, F3 runs the program again, Esc goes back to the chat.
+
+### 5.4 Settings
+Mockup 08, plus one row the mockup doesn't show, Thinking (**Call**):
+
+| Row | Widget | Notes |
+|---|---|---|
+| Provider | two radios | Claude / OpenAI |
+| Model | `W.Select` | that provider's list (section 6) plus "Custom...", which asks for a model id |
+| Claude key | text field, masked | shows `sk-ant-` + `*` + the last 4 characters; Enter edits in clear text |
+| OpenAI key | text field, masked | as above |
+| Thinking | `W.Select` | Low (default) / Medium / High. Sets Claude's `effort` and OpenAI's reasoning effort (6.2, 6.3) |
+| Reply font | `W.Select` | Sans (default) / System (6x8) |
+| Instructions | `W.TextArea`, 3 rows | added to the system prompt. Default: "Keep answers short: I'm reading on a 320 px screen." |
+
+- Key fields accept up to 512 characters.
+- `prefs.json` also takes two hidden overrides, `claude_base` and `openai_base`. The e2e tests use them to reach a local fake server (section 11).
+  - Only `http://127.0.0.1:<port>` and `http://localhost:<port>` are accepted; anything else is ignored (9.3).
+  - They have no row in Settings.
+
+- Below the rows, a dim note: "Keys are long to type: you can also put them in keys.txt in the app's data folder."
+- Keys: Up/Down move between rows, Enter edits or changes a row, Esc saves and goes back.
+- `W.TextField` has no masking, so the key fields draw their own masked text when not being edited.
+
+## 6. Providers
+
+### 6.1 Common shape
+Each provider module turns the neutral conversation into a request, and stream events into neutral calls:
+```lua
+-- request(conv, opts) -> { host, port, tls, path, headers, body }   (body: a JSON string)
+-- parser(handlers) -> feed(event_name, data_string)
+--   handlers.text(delta)            visible text
+--   handlers.thinking()             the model is thinking (show "Thinking...")
+--   handlers.done(info)             info = { stop = "end"|"length"|"refusal"|..., raw = <provider blocks to store>, usage = {...} }
+--   handlers.error(message)         an error event in the stream
+```
+- `src/sse.lua` parses Server-Sent Events from arbitrary chunk boundaries:
+  - LF and CRLF line endings; `event:` and `data:` fields; multi-line data joined with `\n`.
+  - Lines starting `:` (comments, keep-alives) are ignored.
+  - An event is dispatched on a blank line.
+- `src/http.lua` wraps `picocalc.network.http` for one streaming POST:
+  - Setup: `setReadBufferSize(64 * 1024)`, `setConnectTimeout(20)`, `setReadTimeout(120)` (idle-based; long enough for a model thinking before its first word).
+  - Callbacks only append `conn:read()` chunks to a list and set flags. The main loop drains the list into the SSE parser every frame.
+  - A non-200 status means the body is a JSON error, not a stream: read it whole and decode it (section 6.4).
+  - Esc calls `conn:close()`.
+- JSON goes through `picocalc.json.encode` / `decode`. No hand-built JSON.
+
+### 6.2 Claude
+- `POST https://api.anthropic.com/v1/messages`. Headers: `content-type: application/json`, `x-api-key`, `anthropic-version: 2026-10-21`.
+- Body:
+  ```json
+  {
+    "model": "claude-opus-5-5",
+    "max_tokens": 32000,
+    "stream": true,
+    "cache_control": {"type": "ephemeral"},
+    "system": "<section 10>",
+    "output_config": {"effort": "low"},
+    "messages": [ ... ]
+  }
+  ```
+  - **Call:** `max_tokens` 32000 caps a runaway reply while leaving room for long programs.
+  - Top-level `cache_control` caches the stable prefix: the system prompt and the API cheat sheet.
+  - Do not send `temperature`, `top_p` or `top_k`: API version `2026-10-21` rejects them on every model.
+  - Do not send `thinking`: the current models think adaptively by default, and `{type: "disabled"}` is a 400 on Opus 5.5 and Sonnet 5.5. Thinking depth comes from `effort` (the Thinking setting).
+- **Models** (built-in list, from Anthropic's model table as of 2026-10-06):
+
+  | Label | Id | $/MTok in / out | Notes |
+  |---|---|---|---|
+  | Opus 5.5 | `claude-opus-5-5` | 4 / 20 | **the default**: Anthropic's recommended default model |
+  | Sonnet 5.5 | `claude-sonnet-5-5` | 2 / 10 | |
+  | Haiku 5.5 | `claude-haiku-5-5` | 0.10 / 0.50 | no server-side refusal fallback |
+  | Fable 5.1 | `claude-fable-5-1` | 10 / 50 | most capable; slowest |
+
+  - **Call:** the mockups show Sonnet 5.5, but the default is Opus 5.5 at Low thinking. A quick question costs about 1-2 cents with the cached prompt. The owner can pick another model in Settings.
+  - The list is in `src/providers/claude.lua`; "Custom..." covers new models until the app is updated.
+- **Streaming events.** Text appears from `content_block_delta` / `text_delta`. A `content_block_start` of type `thinking` calls `handlers.thinking()`. Display defaults to `"omitted"`, so thinking text is empty; only the signature matters.
+- **Raw blocks** (must get right):
+  - Rebuild each assistant message's full `content` array from the stream: `thinking` blocks with their `signature` (from `signature_delta`), `text` blocks, and `fallback` blocks.
+  - Store the array with the message, and send it back unchanged on every later request, even after a model change. The API drops, unbilled, any block the current model can't read.
+  - History must be **append-only**: an edited earlier turn invalidates thinking blocks, and accounts created on or after 2026-08-31 get a 400. The app never rewrites a sent message.
+  - Messages from OpenAI go to Claude as plain text.
+- **Refusals.**
+  - Send `"fallbacks": "default"` with the header `anthropic-beta: server-side-fallback-2026-07-01` for Opus 5.5, Sonnet 5.5 and Fable 5.1, but not Haiku 5.5. On a policy decline, the API then runs a fallback model on the same stream.
+  - A `fallback` block marks the switch point. When storing a message that has one, drop any `thinking` / `redacted_thinking` block before the last `fallback` block (the echo rule).
+  - `stop_reason: "refusal"` on the final `message_delta` means the whole chain declined. Keep any partial text, and add the note "<model> declined to answer this."
+  - Branch on `stop_reason`, never on `stop_details`.
+  - **Call:** fallbacks are on by default. Tell the owner, and drop them if the owner declines.
+- **Stopped replies.** When Esc stops a reply, keep the text received so far as the assistant message, marked `stopped`. Drop any incomplete thinking block (it has no signature yet). The message is sent back later as plain text.
+- `stop_reason: "max_tokens"` adds the note "Reply cut off at the length limit."
+
+### 6.3 OpenAI
+Facts below were checked against OpenAI's docs (developers.openai.com/api) on 2026-10-25.
+
+- **Call: the Responses API.**
+  - OpenAI recommends it "for all new projects".
+  - Some models (the `*-pro` ones) work only there.
+  - Chat Completions remains supported, but it's the older API.
+  - The cost of this choice: OpenAI-compatible local servers (Ollama, LM Studio), which mostly speak Chat Completions, aren't supported. That is a non-goal (section 2).
+- `POST https://api.openai.com/v1/responses`. Headers: `Authorization: Bearer <key>`, `Content-Type: application/json`.
+- Body:
+  ```json
+  {
+    "model": "gpt-6-luna",
+    "instructions": "<section 10>",
+    "input": [ {"role": "user", "content": "..."}, {"role": "assistant", "content": "..."} ],
+    "stream": true,
+    "store": false,
+    "max_output_tokens": 32000,
+    "reasoning": {"effort": "none"},
+    "stream_options": {"include_obfuscation": false}
+  }
+  ```
+  - `store: false`: otherwise OpenAI keeps every response for at least 30 days.
+  - `include_obfuscation: false` drops padding from every delta event.
+  - `max_output_tokens` includes reasoning tokens. Do not send `max_tokens` (deprecated) or `temperature` / `top_p`.
+  - History goes as plain-string `content`. Reasoning items are not replayed: that is optional, and the app keeps no `raw` for OpenAI.
+- **Models** (built-in list, standard-tier prices for prompts up to 272K tokens):
+
+  | Label | Id | $/MTok in / out | Thinking "Low" sends |
+  |---|---|---|---|
+  | GPT-6 Luna | `gpt-6-luna` | 0.10 / 0.50 | `none` |
+  | GPT-6.1 Sol | `gpt-6.1-sol` | 2 / 10 | `low` (rejects `none`) |
+  | GPT-6 Astra | `gpt-6-astra` | 10 / 50 | `low` (rejects `none`) |
+
+  - **Call:** the default is GPT-6 Luna at Low (effort `none`). OpenAI calls it the fastest and most cost-effective model, and at `none` it streams text without a silent thinking pause, which suits quick questions.
+  - Medium and High send `medium` and `high`. "Custom..." models send `low` for Low.
+- **Streaming events:**
+  - `response.output_text.delta`: `delta` is the text.
+  - `response.refusal.delta`: show it as the reply text.
+  - `response.output_item.added` with item `type: "reasoning"`: call `handlers.thinking()`.
+  - `response.completed`: done, with `response.usage`.
+  - `response.incomplete`: done, with `incomplete_details.reason`, e.g. `max_output_tokens`, which becomes "cut off".
+  - `response.failed`: `response.error.message`.
+  - `error`: `message`.
+  - Ignore every other event.
+  - There is no `[DONE]` line.
+- **Watch out:** `response.completed` repeats the whole answer and the instructions on a single `data:` line, tens of KB. The SSE parser must collect a long line in pieces (a table of chunks, joined once) and not by repeated concatenation, which is quadratic.
+- **Prompt caching** is automatic from 1,024 input tokens. The system prompt (section 10) is over that, so it caches. Reads cost about 0.1x; writes cost 1.25x.
+- **Keys:** OpenAI documents no length (`sk-proj-` keys run about 164 characters), so accept up to 512 and don't check the format. Keys can now expire, which shows up as a 401.
+
+### 6.4 Errors
+Each failure becomes a note in the chat. The last request can be retried by pressing Enter on an empty compose box.
+- No WiFi (`network.getStatus()` not connected): "No WiFi."
+- `clock not set`: retry once by itself after 3 s, then show "The clock isn't set yet; try again in a moment."
+- TLS errors: show the firmware's message.
+- 401 / 403: "<Provider> rejected the API key. Check Settings."
+- 429: tell an account out of credit apart from a rate limit.
+  - OpenAI out of credit: `error.code` is `credit_balance_exhausted`, `organization_spend_limit_exceeded`, `project_spend_limit_exceeded` or `organization_usage_limit_exceeded`, or `error.type` is `insufficient_quota`. Say "Your OpenAI account is out of credit or over its spend limit"; retrying won't help.
+  - Otherwise: "Rate limited; try again in a moment", plus the `Retry-After` seconds when the header is present.
+- Error bodies: Claude's is `{"type":"error","error":{"type","message"}}` and OpenAI's is `{"error":{"message","type","code"}}`. Show the provider's `message` under the friendly line.
+- 5xx and 529 overloaded: "<Provider> is busy; try again."
+- A connection lost mid-reply: keep the partial text, marked as interrupted.
+- An `error` event mid-stream: same as a lost connection.
+
+## 7. Rendering
+
+### 7.1 Fonts and measuring
+- Load `fonts/sans.pfn` and `fonts/sans-bold.pfn` once at start.
+- Measure each character's advance once per font, as PicoSurf's `src/fonts.lua` does, and wrap by pixel width from the advance tables. No `textWidth` calls per word in the hot path.
+- "System (6x8)" uses `FONT_6X8` for message text, with 10 px rows.
+
+### 7.2 Markdown subset
+`src/markdown.lua` turns message text into blocks, and works on partial text while a reply streams:
+- Paragraphs.
+- Headings (`#` to `###`, drawn in bold).
+- Bullets (`-`, `*`, `+`, with nesting by indent) and numbered lists.
+- Fenced code blocks: a panel with a title bar showing the info string or file name; lines wrap at the panel width with a dim mark at the right edge (mockup 04).
+- Block quotes (dim, with a bar).
+- Tables: kept as monospace text.
+- Horizontal rules.
+
+Inline:
+- `**bold**` and `__bold__` switch to Sans Bold.
+- `` `code` `` is drawn in green (`rgb(150,220,150)`).
+- `*italic*` is drawn as plain text, since there is no italic font.
+- Links show their text only.
+
+### 7.3 Folding to ASCII
+- Before parsing, fold UTF-8 to printable ASCII. Copy PicoSurf's `src/fold.lua` (proxy-compatible table: curly quotes, dashes, ellipsis, bullets, NBSP, common symbols).
+- Anything else becomes `?`.
+- The system prompt also asks the model for plain ASCII.
+
+### 7.4 Layout cache and redraw
+- Each message caches its laid-out rows for the current font and width.
+- While a reply streams, only the last message is laid out again, and only from its last complete paragraph.
+- Redraw only when something changed: new text, a key, or a spinner tick every 100 ms.
+- Each frame draws only the rows in view.
+
+## 8. Storage
+
+Everything lives in `/data/net.picodeck.llmchat/`, written with `picocalc.fs` and `picocalc.json`.
+
+**Safe saves.** FatFS's rename fails when the destination exists, so `fs.rename` can't replace a file in one step. A save goes:
+1. Write `<file>.tmp`.
+2. Delete `<file>`.
+3. Rename `<file>.tmp` to `<file>`.
+
+On load, if `<file>` is missing but `<file>.tmp` exists, finish the rename. A power cut at any point then leaves a whole file.
+
+### 8.1 Files
+| Path | Contents |
+|---|---|
+| `prefs.json` | provider, model per provider, thinking, font, instructions, last open chat id, drafts by chat id, and the hidden test overrides (5.4) |
+| `keys.txt` | `claude=...` and `openai=...` lines; `#` starts a comment; editable from a computer over USB or in the Text Editor app |
+| `chats/index.json` | `[{id, title, provider, model, created, updated, count, programs}]`, newest first |
+| `chats/<id>.json` | one chat (8.2) |
+| `programs/index.json` | `{ [name] = {chat, created, updated, size} }` |
+| `programs/<name>.lua` | a program; `<name>.lua.prev` keeps the version before the last fix |
+| `programs/<name>.data/` | that program's own files and settings (section 9.3) |
+
+### 8.2 Chat file
+```json
+{ "v": 1, "id": "20261025-140212-3", "title": "Dice roller", "created": 1792908000, "updated": 1792908132,
+  "items": [
+    { "role": "user", "text": "make me a dice roller" },
+    { "role": "assistant", "provider": "claude", "model": "claude-opus-5-5",
+      "text": "Here's a dice roller...", "raw": [ ...Claude content blocks... ], "stopped": false },
+    { "role": "note", "kind": "program", "text": "dice.lua ended after 12 s" }
+  ] }
+```
+- `note` items are local and never sent.
+- `raw` holds a provider's own blocks, sent back only to that provider (6.2, 6.3).
+- Ids come from the clock (`sys.getClock()`) when it is set, and otherwise from a counter kept in `prefs.json`.
+- **Titles: Owner: tidy short titles**, as in the mockups ("how many cups in a litre?" becomes "Cups in a litre").
+  - Until the title arrives, the chat shows the first user message, cut at a word to 40 characters.
+  - **The request.** When a new chat's first reply completes, send one small non-streaming request to the same provider's cheapest model:
+    - Claude: `claude-haiku-5-5`, `max_tokens` 200, effort `low`.
+    - OpenAI: `gpt-6-luna`, `max_output_tokens` 64, effort `none`.
+    - Prompt: "Write a title of 2 to 5 words for this chat. Reply with the title only." Then the first user message and the first reply, each cut to 1,000 characters.
+    - Cost: well under a tenth of a cent per chat.
+  - **The result.** Fold the reply to ASCII, strip surrounding quotes and trailing punctuation, cap it at 40 characters, then update the header, the chat file and `chats/index.json`.
+  - **Failure.** If the request fails, or the chat has no key for that provider, keep the cut first message and don't retry.
+  - **Conflicts.** Starting a program cancels a pending title request. It is sent again after the chat's next reply.
+- **Call:** keep the 50 most recently updated chats and delete older ones when a new chat is saved. The owner raised no objection to 50.
+- **Call: programs outlive their chats.**
+  - Neither the cap nor Del on a chat deletes programs. A program is deleted only from the Programs tab.
+  - When its chat goes, its index entry's `chat` becomes `null`, and the Programs tab shows "from a deleted chat".
+  - Del on a chat that made programs confirms with "Delete this chat? Its programs are kept."
+- A chat is saved after every completed or stopped reply and every note. The draft is saved on exit.
+
+### 8.3 Long chats
+- Every request resends the whole history. **Call:** past about 150 KB of history, show the note "This chat is getting long; F2 starts a new one."
+- Keep sending as long as the firmware accepts the POST body. The builder measures the largest POST the device can send (section 12).
+
+### 8.4 Importing from the old app
+On first start, if `picocalc.config` still holds `llmchat_api_key`:
+- Copy it to `keys.txt`: as `openai=` if `llmchat_provider` is 1, or `claude=` if it is 2.
+- Ignore Ollama (provider 3); its endpoint was the old native `/api/chat` path, which isn't compatible.
+- Then clear the old keys and save.
+
+## 9. Programs and the sandbox
+
+### 9.1 What counts as a program
+- A fenced code block whose info string starts with `lua`, and whose first line is a comment naming the file: `-- dice.lua` (an optional `: description` may follow).
+- The system prompt tells the model this rule (section 10). Other Lua snippets in explanations are just code blocks.
+- **Name rules:** lower-case; keep `[a-z0-9_-]`; at most 24 characters before `.lua`. If the comment is missing or invalid, it isn't a program.
+- **Saving:** when a reply finishes (or is stopped after the block closed), each program block is saved to `programs/<name>.lua`.
+  - A block from the chat that owns the name (`programs/index.json` `[name].chat`) overwrites the file, after moving the old one to `.prev`. That's what a fix does.
+  - The same name from any other chat gets a numbered name: `dice-2.lua`.
+  - An orphan program, whose chat was deleted, is owned again only through 9.6.
+- The code panel's action line shows "F3 Run · saved as dice.lua" (mockup 04).
+
+### 9.2 Running one
+`src/sandbox.lua`, called from F3 or the Programs tab:
+1. **Refuse** if a reply is still arriving: its HTTP callbacks would run inside the program. Cancel a pending title request (8.2).
+2. **Read** the file. Run `collectgarbage("collect")` and drop the chat's layout caches, to leave the program as much memory as possible.
+3. **Compile** with `load(src, "=" .. name, "t", env)`. A syntax error goes straight to the error screen.
+4. **Prepare.** Register the "Stop program" system-menu item (9.5) and note the start time.
+5. **Run** under `xpcall(fn, handler)`. The handler records `tostring(err)`; there is no traceback, because `debug` is blocked. The message carries `name:line`.
+6. **Clean up** (9.4), then remove the menu item.
+7. **Drain input.** Discard pending keys and events, so the Esc that ended the program doesn't also act in the chat.
+8. **Report.** On a normal return or a program `sys.exit()`, add the note "dice.lua ended after N s". On an error, show the error screen (5.3).
+
+### 9.3 The program's world
+`env` is a fresh table for every run.
+
+**Globals passed through:** `assert error ipairs next pairs pcall xpcall select tonumber tostring type rawequal rawget rawset rawlen setmetatable getmetatable collectgarbage`.
+
+**Library tables are copied, not shared.** `math`, `string`, `table`, `utf8` and `coroutine` are fresh shallow copies for every run, so a program that replaces `string.format` changes only its own copy.
+- At app start, the chat sets `__metatable = false` on the string metatable. Then `getmetatable("")` can't reach the real `string` table; method calls like `s:upper()` still work.
+- As a backstop, the runner snapshots those five real tables before each run, and puts back any field that changed afterwards.
+
+**Globals changed:**
+- `_G` is `env`.
+- `print(...)` writes to `sys.log` and keeps the last 5 lines for the error screen.
+- `load(chunk, name, mode, e)` forces mode `"t"` and defaults `e` to `env`. Otherwise a program could load code that sees the chat app's globals.
+- `require` and `dofile` are absent.
+- `APP_DIR` is the program's data folder, `APP_NAME` is the file name, and `APP_ID` is the chat app's id.
+
+**`picocalc` is an allowlist, not a pass-through.** The program's `picocalc` holds only functions and constants that have been audited (9.4's table). Anything not on the list is absent, so a new firmware API is closed to programs until it is audited.
+- Each module is a plain table of copied entries, or wrappers where needed. Any metatable involved is locked with `__metatable = false`, so `getmetatable` never hands back a real module.
+- **Every function in any module that takes a path** goes through the same path check as `fs`. That includes image and font loading, sound and file players, zip, `crypto.sha256File`, video, and game saves. It is the route most likely to be missed, so 9.4's table has a column for it.
+
+Overrides:
+- **`sys.exit()`** raises a private sentinel table that the runner recognises as "the program ended". This is the essential override, because the real one would close the whole chat app.
+- **`fs.*`** only reaches `programs/<name>.data/`. Relative paths resolve there. Any other path, including the chat's files and `keys.txt`, gets `nil, "access denied"`. `fs.appPath(n)` returns a path in that folder, `fs.browse` is absent, and `fs.open` handles are tracked.
+- **`config` and `appconfig`** are a store of the program's own, in `programs/<name>.data/config.json`, with the same calls as the real one. The real one holds the chat's data (nothing secret after section 8, but still the chat's).
+- **`sysconfig`** is absent. The chat app doesn't have that requirement anyway.
+- **Tracked creators.** These calls record what they return, so 9.4 can release it: `display.loadFont`, `graphics.font.new`, `network.http.new`, `tcp.new`, `sys.addMenuItem`, and the sound and player constructors.
+- **`display.unloadFont`** works only on ids the program loaded, so it can't unload the chat's fonts.
+- **`sys.removeMenuItems`** removes the program's items only.
+- **`sys.loadlib(name)`** reads `/system/lib/<name>.lua` as text and loads it with `load(src, name, "t", env)`, so a library sees only the program's `picocalc` and file access. Passing the real `loadlib` through would let `download.toFile` write anywhere the chat can, `prefs.json` included.
+
+**The key stays out of reach.** These are the routes from a program to an API key, and how each is shut. Keep this list current as the code changes:
+- **`keys.txt` or `prefs.json` on the card:** every file path is checked, in every module.
+- **The chat's globals and modules:** a separate `env`, a `load` that defaults to it, no `require`, and copied library tables.
+- **Redirecting the chat's next request:** the hidden base overrides (5.4) accept only `http://127.0.0.1:<port>` or `http://localhost:<port>`, so even a tampered `prefs.json` can't send a key to another machine.
+- **A request in flight:** a program can't run while a reply is arriving (9.2).
+
+### 9.4 Cleanup after every run
+The firmware's launcher resets a list of things between apps (`src/os/CLAUDE.md`, "Exit teardown"). A program never exits the app, so the runner does the Lua-visible equivalent itself:
+- **Display:** `clearClipRect()`, scroll offset 0 and the full scroll area, the chat's font, and the brightness saved before the run.
+- **Fonts:** unload every font the program loaded.
+- **Files:** close every tracked handle.
+- **Network:** close every tracked HTTP connection and TCP socket.
+- **Audio:** stop tones, players and streams.
+- **System:** resume background work if the program paused it (`sys.pauseBackground`); reset the frame-rate target (`perf`); remove the sprite display list (`graphics.sprite.removeAll()`).
+- **Menu:** remove the program's menu items.
+- **Memory:** `collectgarbage("collect")`.
+
+The builder writes the complete list by going through every `docs/API-*.md` in `picodeck`. For each function, record:
+- whether programs get it at all (the allowlist in 9.3);
+- whether it takes a path, and so is wrapped with the path check;
+- whether it changes state outside the program's own objects, and so is wrapped, reset afterwards, or recorded as harmless.
+
+Keep that table in `src/sandbox.lua`'s header comment. A host test checks the program's `picocalc` against it.
+
+### 9.5 Stopping a hung program
+`debug` is blocked, so the app can't interrupt a loop by itself. The firmware's service hook still runs every millisecond, though, and the Sym key opens the system menu from inside any loop.
+- Before each run, the chat adds a menu item, **"Stop program"**, with `sys.addMenuItem`.
+- Its callback raises the stop sentinel. The firmware runs item callbacks after the menu closes, "and they may leave by longjmp (`sys.exit()`, a Lua error)" (`src/os/CLAUDE.md`, "App item callbacks run last"). The error should therefore unwind the running program up to the runner's `xpcall`.
+- **Verify this first** on the simulator and the device, with `while true do end` and with a loop that calls only `sys.sleep` (section 12).
+- **Limits:** a program that catches errors with its own `pcall` can swallow the stop. The system menu's "Exit App" remains as a last resort. It closes the chat app, which loses nothing, since the chat is already saved.
+
+### 9.6 Fixing a crash
+"Ask <provider> to fix" appends a user message and sends it. The code is already in the conversation, so it isn't resent, and history stays append-only (6.2):
+```
+dice.lua stopped with an error:
+dice.lua:12: attempt to concatenate a nil value (local 'b')
+It printed:
+<last lines, if any>
+Please send a fixed version of the whole program.
+```
+- A program run from the Programs tab opens its chat first.
+- If that chat was deleted, start a new chat whose first user message holds the program text in a ```lua block, then the error. The new chat becomes the program's owner (`index[name].chat`), so the fix saves over the same file.
+- The fixed version saves over the file (9.1), and the action line offers F3 again.
+
+### 9.7 Limits, and the stronger option for later
+This is a fence, not a wall:
+- A program shares the chat's Lua heap.
+- It can still draw over the screen, play sound, or use the network with the chat's `http` permission.
+- A program written to catch errors can ignore "Stop program".
+
+The real wall would be a firmware feature: run a program as its own app in its own VM, then return to the chat. The OS would do the full teardown. That fits the later "turn a program into an app" step, so it is out of scope here.
+
+## 10. The system prompt
+
+`prompt/system.txt` + `prompt/picodeck-api.md`, assembled in a fixed order so the prefix stays byte-identical between requests and caches:
+1. **Setting:** "You're chatting with someone on a PicoCalc, a handheld with a 320x320 screen (about 50 characters a line) and a small keyboard. Answer briefly unless asked for more. Use plain ASCII: no emoji, curly quotes or special symbols. Markdown works: headings, bold, lists and code blocks."
+2. **Programs:**
+   - When asked for a program, write one complete Lua 5.4 file in a single ```lua block whose first line is `-- <name>.lua`.
+   - The rules: one file; no `require`, `io`, `os` or `debug`; a main loop that calls `input.update()`, draws, `display.flush()`, and returns when Esc is pressed; integers are 32-bit and numbers are single-precision floats; text is ASCII; keep it under about 200 lines unless asked; use `APP_DIR` for any files.
+   - A short example program.
+3. **API cheat sheet** (`prompt/picodeck-api.md`): the subset of `picocalc.*` a program gets (9.3).
+   - Hand-condensed from `picodeck/docs/API-*.md`, one line per function with its signature, plus constants (buttons, colours, fonts) and screen facts.
+   - **Call:** about 3-4K tokens, which is over every model's cache minimum.
+4. **The owner's instructions** from Settings, last, because they change most often.
+
+Claude gets this as `system`; OpenAI gets it as `instructions` (6.3).
+
+A test keeps the cheat sheet honest: every `picocalc.x.y` it names must appear in `$PICODECK_ROOT/docs/API-*.md`. The test skips when `PICODECK_ROOT` is unset, as PicoSurf's does. An e2e test runs the example program from the prompt in the simulator.
+
+## 11. Testing
+
+**Real API use. Owner: the builder may use the owner's Claude and OpenAI keys**, for about $2 in total, mostly on the cheap models (Haiku 5.5, GPT-6 Luna).
+- **Where the keys live:** ask the owner where they are, and keep the builder's copy outside the repo in `~/.config/llmchat/keys.txt` (mode 600), as PicoSurf keeps its proxy token. Never commit a key.
+- **Recording:** `tools/record_stream.py` sends a real request and saves the raw SSE to `tests/fixtures/<provider>-<case>.sse`, with request ids and anything key-like removed. Record text, thinking, `max_tokens` / `incomplete`, and the title request for each provider, plus a 401 from a deliberately wrong key.
+- **Hand-written cases:** a refusal and a mid-stream fallback can't be triggered on demand. Write those fixtures by hand from the API docs, and mark them so in their file names.
+- **Device checks:** the builder runs the checks in section 12 and the release checklist with these keys, keeping a running total of what was spent.
+
+**Host tests** (`make test`: `lua5.4 tests/run.lua` and `build/lua32 tests/run.lua`, PicoSurf's pattern, fake `picocalc` in `tests/fakepc.lua`):
+- **SSE:** every split of a recorded stream across chunk boundaries; CRLF; comments; multi-line data.
+- **Claude parser:** recorded streams for text, thinking + signature, fallback mid-stream, refusal, max_tokens, an error event. Check the stored `raw` against the echo rule.
+- **OpenAI parser:** recorded Responses streams for text, a reasoning item, a refusal, `incomplete` (max_output_tokens), `failed`, an `error` event, and a `response.completed` line over 64 KB split across many chunks.
+- **Request builders:** golden JSON for both providers, including an OpenAI message sent to Claude and back. Under lua32, check that integers encode without `.0`.
+- **Markdown and layout:** blocks, inline bold and code, partial text while streaming, folding, wrap by advance table, code-line wrap marks.
+- **Program extraction:** names, collisions, the same name in the same chat (`.prev`), invalid headers, snippets ignored.
+- **Store:** index order, the 50-chat cap, atomic writes, drafts, the old-config import.
+- **Sandbox** (with fakes):
+  - Globals don't leak in either direction.
+  - `getmetatable(picocalc.sys)` doesn't reveal the real module.
+  - The `sys.exit` sentinel ends the run cleanly.
+  - `fs` refuses `../`, absolute paths outside the folder, and `keys.txt`. So does every other path-taking function on the allowlist (one test per function, generated from 9.4's table).
+  - A program's `string.format = nil` doesn't reach the chat, and `getmetatable("")` returns `false`.
+  - `sys.loadlib("download")` gets a library that can only write inside the program's folder.
+  - A non-loopback `claude_base` or `openai_base` in `prefs.json` is ignored.
+  - `load` without an env gets the program's env.
+  - Tracked fonts, files and connections are released.
+  - `unloadFont` refuses the chat's fonts.
+
+**Simulator e2e** (`make e2e`, pytest + `picodeck/tests/e2e/picodeck_simulator.py`):
+- A fake API server, `tests/e2e/fake_api.py`, replays the recorded SSE streams (and non-streaming title replies) for both providers on `127.0.0.1`. The app reaches it through hidden test overrides in `prefs.json` (`claude_base`, `openai_base`); the simulator's HTTP is libcurl, so plain `http://` to localhost works.
+- **Cases:**
+  - Send and stream (screenshot checks of the reply and spinner).
+  - Esc stops a reply.
+  - A 401 shows the right note; Enter retries.
+  - Recent chats: open, delete.
+  - Settings persist.
+  - A program is saved, F3 runs it, and Esc returns to the chat.
+  - A program that errors shows the error screen, and "Ask to fix" sends the right message.
+  - A program calling `sys.exit()` returns to the chat, and the app is still running.
+  - "Stop program" from the system menu ends `while true do end`.
+  - A program that loads fonts and opens files leaves nothing behind (run it 10 times; the chat still draws and files still open).
+
+**Device checks** (a short checklist in the README, run before the release tag):
+- A real Claude chat and a real OpenAI chat over TLS.
+- Streaming looks smooth.
+- "Stop program" works.
+- Keys from `keys.txt` over USB are read.
+- The lowest free heap after a long chat plus a program run.
+
+## 12. Verify first
+
+The builder starts with these, because each could change the design:
+1. **"Stop program" via a menu-item callback** raising an error out of a tight loop and out of `sys.sleep`, in the simulator and on the device. If it can't, fall back to documenting Sym → Exit App, and look at a small firmware change (for example, a `sys.setInterruptKey`-style hook) as a separate request to the owner.
+2. **Streaming delivery on the device.** Do SSE chunks reach `setRequestCallback` promptly (TLS records of a few hundred bytes), or does anything buffer them?
+3. **The largest POST body the device sends** (try 64, 256 and 512 KB). That sets the long-chat threshold in 8.3.
+4. **`picocalc.json.decode` cost** for a few hundred small events a second on the device.
+
+## 13. Left to the builder
+- Module boundaries inside `src/`, and how much of PicoSurf's code to copy (`fold.lua`, `fonts.lua` measuring, `wrap.lua`, the `http.lua` patterns, `build_lua32.sh`). Copying is fine: same owner and licence.
+- How the screens share state, and the input plumbing (`input.pollEvent` gives Shift for Shift+Enter; the widgets take `(btns, ch)`).
+- Exact colours and spacing beyond the mockups.
+- The README: what the app does, the keys, `keys.txt`, the sandbox's limits (9.7), and the device checklist.
+- `min_firmware` in `app.json`.
