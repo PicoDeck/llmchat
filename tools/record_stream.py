@@ -7,14 +7,16 @@ Cases: text, thinking (claude) / reasoning (openai), maxtokens (claude) /
 incomplete (openai), title, 401.
 
 Keys are read only from ~/.config/llmchat/keys.txt (lines `claude=...` and
-`openai=...`) and are never printed. --dry-run prints the request (URL,
-headers with the key replaced by <key>, body) and sends nothing.
+`openai=...`) and are never printed; a keys file that other users can read
+or write is refused. --dry-run prints the request (URL, headers with the key
+replaced by <key>, body) and sends nothing.
 
 The raw response is saved to tests/fixtures/<provider>-<case>.sse (or .json
 for title and 401; an error reply gets a leading `#status N` line), with
-msg_/resp_/req_ ids replaced by <prefix>_fixture and sk-... strings removed.
-Usage and cost are appended to docs/research/api-spend.md from the spec's
-price tables.
+msg_/resp_/req_/rs_/fc_/item_ ids replaced by <prefix>_fixture and sk-...
+strings removed. Usage and cost are appended to docs/research/api-spend.md
+from the spec's price tables (a new log gets its table header first); an
+error reply is not billed, and gets a row with its status and $0.
 """
 import json
 import os
@@ -102,9 +104,21 @@ def build(provider, case):
     raise SystemExit("provider must be claude or openai")
 
 
+def shown(path):
+    """path as the owner would type it: the home directory as ~."""
+    home = os.path.expanduser("~")
+    if path.startswith(home + os.sep):
+        return "~" + path[len(home):]
+    return path
+
+
 def load_key(provider):
     try:
         with open(KEYS) as f:
+            # Checked on the open file, before any of it is read.
+            if os.fstat(f.fileno()).st_mode & 0o066:
+                raise SystemExit("%s can be read or written by other users; run: chmod 600 %s"
+                                 % (shown(KEYS), shown(KEYS)))
             for line in f:
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
@@ -116,8 +130,14 @@ def load_key(provider):
     raise SystemExit("no %s key in %s" % (provider, KEYS))
 
 
+# An id is its prefix and letters and digits, a digit among them (OpenAI's
+# rs_, fc_ and item_ ids as well): the API's own names that start the same
+# way, such as item_id and item_reference, have none.
+ID = re.compile(r"\b(msg|resp|req|rs|fc|item)_(?=[A-Za-z0-9]*[0-9])[A-Za-z0-9]+")
+
+
 def scrub(text):
-    text = re.sub(r"\b(msg|resp|req)_[A-Za-z0-9]+", r"\1_fixture", text)
+    text = ID.sub(r"\1_fixture", text)
     return re.sub(r"sk-[A-Za-z0-9_\-]+", "<removed>", text)
 
 
@@ -150,17 +170,32 @@ def usage_of(provider, text):
     return inp, out, model
 
 
-def log_spend(provider, case, text):
-    try:
-        inp, out, model = usage_of(provider, text)
-    except (ValueError, KeyError):
-        return
-    pin, pout = PRICES.get(model, (0, 0))
-    cost = (inp * pin + out * pout) / 1e6
+SPEND_HEADER = ("# API spend\n\n"
+                "Written by tools/record_stream.py, a row per request. An error reply is not billed.\n\n"
+                "| case | status | model | in | out | cost |\n"
+                "|---|---|---|---|---|---|\n")
+
+
+def log_spend(provider, case, status, text):
+    if status == 200:
+        try:
+            inp, out, model = usage_of(provider, text)
+        except (ValueError, KeyError):
+            return
+        pin, pout = PRICES.get(model, (0, 0))
+        cost = (inp * pin + out * pout) / 1e6
+    else:
+        inp, out, model, cost = 0, 0, "-", 0
     os.makedirs(os.path.dirname(SPEND), exist_ok=True)
+    new = not os.path.exists(SPEND) or os.path.getsize(SPEND) == 0
     with open(SPEND, "a") as f:
-        f.write("| %s-%s | %s | %d | %d | $%.4f |\n" % (provider, case, model, inp, out, cost))
-    print("spend: $%.4f (%d in, %d out, %s)" % (cost, inp, out, model))
+        if new:
+            f.write(SPEND_HEADER)
+        f.write("| %s-%s | %d | %s | %d | %d | $%.4f |\n" % (provider, case, status, model, inp, out, cost))
+    if status == 200:
+        print("spend: $%.4f (%d in, %d out, %s)" % (cost, inp, out, model))
+    else:
+        print("spend: $0 (HTTP %d: not billed)" % status)
 
 
 def main(argv):
@@ -185,7 +220,7 @@ def main(argv):
     with open(os.path.join(FIXTURES, name), "w") as f:
         f.write(head + text)
     print("saved %s (HTTP %d, %d bytes)" % (name, status, len(text)))
-    log_spend(provider, case, text)
+    log_spend(provider, case, status, text)
 
 
 if __name__ == "__main__":

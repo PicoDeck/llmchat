@@ -93,6 +93,7 @@ The Sans reading font is converted from X.Org's Adobe bitmap fonts; [fonts/LICEN
 ## Development
 - `make test`: Lua unit tests under stock Lua and under `lua32`, which has the device's 32-bit numbers. Building `lua32` needs a PicoDeck checkout; set `PICODECK_ROOT`.
 - `make e2e`: smoke tests in the PicoDeck simulator against a fake API server on `127.0.0.1` (the app reaches it through hidden `claude_base` / `openai_base` overrides in `prefs.json`). They need a PicoDeck checkout (`PICODECK_ROOT`, default `~/Projects/PicoDeck/picodeck`); run `make simulator` there first.
+- `make test-tools`: pytest tests of `tools/record_stream.py`, which send no request and read no keys.
 - [docs/device-checklist.md](docs/device-checklist.md): the checks to run on a real PicoCalc before a release.
 - `tools/make_icon.py` redraws `icon.png`; `tools/record_stream.py` records real API streams for test fixtures.
 - Releases: bump `version` in `app.json`, then tag `v<version>`. CI builds the store ZIP, `picodeck-llmchat-v<version>.zip` (named after the tag).

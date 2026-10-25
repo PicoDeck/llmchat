@@ -2,7 +2,7 @@ LUA ?= lua
 PICODECK_ROOT ?= $(HOME)/Projects/PicoDeck/picodeck
 export PICODECK_ROOT
 
-.PHONY: test test-host test-lua32 e2e clean
+.PHONY: test test-host test-lua32 e2e test-tools clean
 
 # Host tests under the system Lua and under lua32 (the device's numbers).
 test: test-host test-lua32
@@ -19,6 +19,10 @@ test-lua32: build/lua32
 # Simulator smoke tests (needs PicoDeck's simulator: make simulator in picodeck).
 e2e:
 	SDL_VIDEODRIVER=dummy python3 -m pytest tests/e2e -v
+
+# tools/record_stream.py's tests: no network, no keys.
+test-tools:
+	python3 -m pytest tests/tools -v
 
 clean:
 	rm -rf build
