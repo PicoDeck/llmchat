@@ -4,24 +4,25 @@ Open items left when LLM Chat 2.0 was merged (2026-10-26). The build was reviewe
 
 ## Before the first real recording (needs the API keys)
 
-- `tools/record_stream.py`:
-  - Refuse a keys file that isn't mode 600.
-  - Scrub `rs_`, `fc_` and `item_` ids as well as the ones it already scrubs. Real reasoning recordings carry live `rs_` ids.
-  - `log_spend` writes a junk row for error bodies and no header for a new file. Create the spend log when recording starts.
 - Replace the hand-written fixtures in `tests/fixtures/` (each starts with a `: provisional` comment) with recordings, and re-run `make test`.
 - Check that Claude's raw content blocks survive the JSON round trip. An empty array such as `citations: []` may re-encode as `{}`. History is append-only, so a 400 from this would break that chat on every later request. Either confirm it with the first recordings or clean the raw blocks before sending.
 - Write and run the stream and POST-size probes (plan Task 1, Steps 1, 2, 6 and 7; `tools/probes/` has only the key-free ones so far). Then set the long-chat limit `LONG_BYTES` in `src/chat.lua` from the POST probe (it is 150 KB for now).
 - Run the PENDING rows in `docs/device-checklist.md`: real Claude and OpenAI chats, streaming smoothness, memory after a long chat, the prompt-cache check, ids near midnight, the old-key import, opening a 150 KB chat, the frame rate while a program streams, and the cost of the run-over gate and of the save at send.
 
-## Before release (one small fix round)
+## Before release
 
-- **The download library is broken inside programs.** picodeck's `system/lib/download.lua` calls `fs.setSlowMode`, which the program allowlist denies (`src/sandbox_api.lua`). So `sys.loadlib("download")` fails with "attempt to call a nil value" inside its own request callback. Give the program environment a no-op or allowed `fs.setSlowMode`, and add a test that runs a fake transfer.
-- **A `<close>` handler gets past Stop program.** The error and Stop paths close the run-over gate before the stack unwinds, and Stop requires the gate to be open. So a program's `__close` handler that loops forever can't be stopped; only Exit App ends it. It can't reach the firmware, network, files or menu. Fix: let Stop raise until `_xpcall` returns (`src/sandbox.lua`, near the `_xpcall` call and the Stop menu item). Then correct three claims that overstate this: `README.md` ("none of its code runs again", and `pcall` named as the only way to ignore Stop) and the gate comment in `src/sandbox.lua`.
-- **The frame guard builds its report outside its pcall** (`src/app.lua`, `App:frame`). An out-of-memory error raised while it reports another error still ends the app. Put one pcall around the whole report.
+- **Investigate: a program callback the firmware fires from its hook, and that never returns, can't be stopped.** The firmware fires HTTP, TCP and sound callbacks from its service pass, which runs inside the Lua hook (`lua_service_full`, picodeck `src/os/lua_bridge.c`; `lua_bridge_network.c` says so for HTTP), and Lua runs no hook inside a hook. So a program callback that loops there gets no service pass: no watchdog feed, no exit request, no system menu key. Neither Stop program nor Exit App can reach it, and the watchdog probably resets the device. Not yet checked on the device, and nothing in this app fixes it yet (README and spec 9.7 state it as a known limit). Two directions to try:
+  - Run each program callback in a fresh coroutine (in `callbackOf`, `src/sandbox.lua`). A new Lua thread has hooks again, so the firmware's cheap hook work (watchdog, exit request, the system menu key) would run inside it. Whether Stop program or Exit App then works there needs checking on the device.
+  - A firmware-side change in picodeck.
 
 ## Later
 
-- CI runs the tests under one Lua only. Add a job for `build/lua32`, the 32-bit-number build the device matches. `proxied_types_match_firmware` checks nothing when `PICODECK_ROOT` is unset, so give CI a picodeck checkout.
+- A stronger Stop program:
+  - A "sticky stop": once `run.stopping` is set, every gated function and callback wrapper raises `run.STOP` (as the firmware's own exit does). That closes every remaining way to ignore Stop that passes through a gated call (spec 9.7's list), leaving only loops that compute and touch nothing.
+  - `env.load` reads a reader function's whole chunk itself, then loads the string, so an error in the reader no longer runs the runner's message handler and closes the gate early.
+  - `callbackOf` returns early once `run.stopping` is set, so after one Stop no program callback runs again.
+- `tools/record_stream.py` doesn't scrub `call_` ids (OpenAI function-call ids).
+- CI runs the tests under one Lua only. Add a job for `build/lua32`, the 32-bit-number build the device matches. `proxied_types_match_firmware` and the two download-library tests check nothing when `PICODECK_ROOT` is unset, so give CI a picodeck checkout.
 - Possible slowness on the device:
   - The Markdown parser rescans quadratically on an unmatched `[`: 20,000 `[a` took 11 s on the host, and the parse reruns while streaming (`src/markdown.lua`).
   - The program error screen folds a whole huge line before cutting it: 4 MB took 0.69 s on the host and would take tens of seconds on the device, where Stop can't help. Cut the line first.
