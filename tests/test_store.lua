@@ -339,4 +339,22 @@ return {
         T.ok(rawequal(err, exit), "the error changed on the way")
         T.eq(F.slowMode, false, "after an open that raised")
     end,
+
+    -- A memory error in onCard's own bookkeeping (outside fn's pcall) must
+    -- not leave it believing it is nested: the next write with a request in
+    -- flight still turns slow mode on, after something (a program run's
+    -- cleanup) has put the bus back to full speed.
+    slow_mode_survives_a_memory_error_in_oncard = function()
+        local s, F = onCard(true)
+        local pack = table.pack
+        table.pack = function() error("not enough memory", 0) end
+        local ok = pcall(s.writeText, s, "a.txt", "x")
+        table.pack = pack
+        T.ok(ok, "onCard's bookkeeping raised")
+        F.pc.fs.setSlowMode(false)
+        local before = F.slowWrites
+        T.ok(s:writeText("b.txt", "y"))
+        T.ok(F.slowWrites > before, "the next write ran at full speed with a request in flight")
+        T.eq(F.slowMode, false, "left in slow mode")
+    end,
 }

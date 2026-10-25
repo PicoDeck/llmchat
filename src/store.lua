@@ -20,7 +20,8 @@ local function defaults()
 end
 
 function Store.new(fs, json, dir)
-    return setmetatable({ fs = fs, json = json, dir = dir or "/data/net.picodeck.llmchat" }, Store)
+    return setmetatable({ fs = fs, json = json, dir = dir or "/data/net.picodeck.llmchat",
+                          slowing = false }, Store)
 end
 
 function Store:path(rel) return self.dir .. "/" .. rel end
@@ -36,7 +37,10 @@ function Store:path(rel) return self.dir .. "/" .. rel end
 -- mode (1 MHz, as the store and the download library do around their
 -- transfers): its writes, and the deletes and renames that write the FAT and
 -- directory too. Slow mode is off again on every path; an error then goes
--- on as it was. A nested call runs inside the outer one's slow mode.
+-- on as it was. A nested call runs inside the outer one's slow mode. Nothing
+-- between setting `slowing` and clearing it allocates (the key exists from
+-- Store.new, and fn's results, at most two, are taken without a table), so a
+-- memory error can't leave it set and every later call thinking it is nested.
 function Store:onCard(fn, ...)
     local fs = self.fs
     if self.slowing or type(fs.setSlowMode) ~= "function" or not (self.radioBusy and self.radioBusy()) then
@@ -44,11 +48,11 @@ function Store:onCard(fn, ...)
     end
     self.slowing = true
     pcall(fs.setSlowMode, true)
-    local r = table.pack(pcall(fn, ...))
+    local ok, a, b = pcall(fn, ...)
     pcall(fs.setSlowMode, false)
     self.slowing = false
-    if not r[1] then error(r[2], 0) end
-    return table.unpack(r, 2, r.n)
+    if not ok then error(a, 0) end
+    return a, b
 end
 
 -- Deletes a file, or with `recursive` a folder and all in it, on the card.
