@@ -148,15 +148,8 @@ function P.parser(json, handlers)
     end
 end
 
-local function cut(s, n)
-    s = tostring(s or "")
-    if utf8.len(s) and utf8.len(s) > n then return s:sub(1, utf8.offset(s, n + 1) - 1) end
-    if #s > n and not utf8.len(s) then return s:sub(1, n) end
-    return s
-end
-
 function P.titleRequest(json, key, firstUser, firstReply)
-    local content = Titles.PROMPT .. "\n\n" .. cut(firstUser, 1000) .. "\n\n" .. cut(firstReply, 1000)
+    local content = Titles.PROMPT .. "\n\n" .. Titles.cutChars(firstUser, 1000) .. "\n\n" .. Titles.cutChars(firstReply, 1000)
     local body = {
         model = P.TITLE_MODEL,
         max_tokens = 200,

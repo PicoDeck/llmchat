@@ -18,6 +18,14 @@ local function cut(s, n)
     return trim(head)
 end
 
+-- s cut to at most n characters (UTF-8 aware; bytes when it isn't valid UTF-8).
+function M.cutChars(s, n)
+    s = tostring(s or "")
+    if utf8.len(s) and utf8.len(s) > n then return s:sub(1, utf8.offset(s, n + 1) - 1) end
+    if #s > n and not utf8.len(s) then return s:sub(1, n) end
+    return s
+end
+
 -- A model's title reply as a chat title: ASCII, no surrounding quotes or
 -- trailing punctuation, at most 40 characters. nil when nothing is left.
 function M.clean(s)
