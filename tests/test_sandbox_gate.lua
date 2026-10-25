@@ -408,11 +408,15 @@ return {
         for _, list in pairs(run.tracked) do T.eq(next(list), nil, "nothing tracked") end
     end,
 
-    -- The gate closes with the outcome, inside the protected call: no
-    -- program callback ever runs open-gated once the outcome is recorded,
-    -- whether the program returned, raised or called sys.exit().
-    gate_closes_with_the_outcome = function()
-        for _, ending in ipairs({ "return", "error('boom')", "picocalc.sys.exit()" }) do
+    -- Review M1: the outcome is recorded and then the gate closes, both
+    -- inside the protected call, whether the program returned, raised or
+    -- called sys.exit(). A callback the firmware fires between the two (at
+    -- the runner's one instruction there) is still the run (spec 9.7), as
+    -- the instructions before the outcome are, and can't change the outcome;
+    -- none runs program code once the gate is closed.
+    gate_closes_after_the_outcome = function()
+        for ending, want in pairs({ ["return"] = "ended", ["error('boom')"] = "error",
+                                    ["picocalc.sys.exit()"] = "exit" }) do
             local F = Fake.new()
             local players = fakePlayers(F)
             local armed = false
@@ -422,22 +426,28 @@ return {
                 log(m)
             end
             local run = Sandbox.newRun(F.pc, context())
-            local open, ran = 0, 0
+            local ran, window, late = 0, 0, 0
             run.env.MARK = function()
                 ran = ran + 1
-                if run.ok ~= nil and not run.over then open = open + 1 end
+                if run.over then
+                    late = late + 1
+                elseif run.ok ~= nil then
+                    window = window + 1
+                end
             end
             local unhook = hookSandbox(function() return armed end, function()
                 for _, p in ipairs(players) do if p.finish then pcall(p.finish) end end
             end)
-            Sandbox.execute(F.pc, run, [[
+            local r = Sandbox.execute(F.pc, run, [[
                 local p = picocalc.sound.sampleplayer("a.wav")
-                p:setFinishCallback(function() MARK() end)
+                p:setFinishCallback(function() MARK(); picocalc.sys.exit() end)
                 picocalc.sys.log("END")
             ]] .. ending)
             unhook()
             T.ok(ran > 0, ending .. ": the callback never ran")
-            T.eq(open, 0, ending .. ": a callback ran with the outcome recorded and the gate open")
+            T.eq(late, 0, ending .. ": a callback ran program code with the gate closed")
+            T.ok(window <= 1, ending .. ": " .. window .. " callbacks between the outcome and the gate")
+            T.eq(r.status, want, ending)
         end
     end,
 
@@ -477,8 +487,9 @@ return {
     end,
 
     -- Stop raises until the run's xpcall returns: chosen unprotected, as the
-    -- firmware runs it, at any one of the runner's instructions once the gate
-    -- is closed, it never raises out of execute and never changes the outcome.
+    -- firmware runs it, at any one of the runner's instructions once the
+    -- outcome is recorded (the gate closes one instruction later), it never
+    -- raises out of execute and never changes the outcome.
     -- (This would still pass without Stop's run.unwound check: shut clears
     -- the menu inside runThenShut, so a Stop after xpcall raises at most into
     -- execute's pcall, which keeps the outcome. The check is belt and braces.)
@@ -490,7 +501,7 @@ return {
                 local run = Sandbox.newRun(F.pc, context())
                 local seen = 0
                 debug.sethook(function()
-                    if not run.over or seen > n then return end
+                    if (run.ok == nil and not run.over) or seen > n then return end
                     local info = debug.getinfo(2, "S")
                     if not (info and info.source:find("sandbox.lua", 1, true)) then return end
                     seen = seen + 1
@@ -501,6 +512,36 @@ return {
                 debug.sethook()
                 T.ok(ok, src .. ": Stop at instruction " .. n .. " raised out of execute")
                 T.eq(r.status, want, src .. ": Stop at instruction " .. n)
+            end
+        end
+    end,
+
+    -- Review M6: two Stops, at any two of the runner's first instructions
+    -- once the outcome is recorded, never raise out of execute either: a first
+    -- one in the instruction before run.unwound is set raises into
+    -- runThenShut, and a second one in execute's recovery must find the run
+    -- unwound.
+    two_stops_after_the_gate_stay_in_the_run = function()
+        for src, want in pairs({ ["return 1"] = "ended", ["error('boom')"] = "error",
+                                 ["picocalc.sys.exit()"] = "exit" }) do
+            for n = 1, 12 do
+                for m = n + 1, n + 16 do
+                    local F = Fake.new()
+                    local run = Sandbox.newRun(F.pc, context())
+                    local seen = 0
+                    debug.sethook(function()
+                        if (run.ok == nil and not run.over) or seen > m then return end
+                        local info = debug.getinfo(2, "S")
+                        if not (info and info.source:find("sandbox.lua", 1, true)) then return end
+                        seen = seen + 1
+                        local stop = F.menu["Stop program"]
+                        if (seen == n or seen == m) and stop then stop() end
+                    end, "", 1)
+                    local ok, r = pcall(Sandbox.execute, F.pc, run, src)
+                    debug.sethook()
+                    T.ok(ok, src .. ": Stops at " .. n .. " and " .. m .. " raised out of execute")
+                    T.eq(r.status, want, src .. ": Stops at " .. n .. " and " .. m)
+                end
             end
         end
     end,
@@ -557,6 +598,50 @@ return {
             T.ok(stopFn, ending .. ": Stop was never chosen")
             T.ok(pcall(stopFn), ending .. ": Stop raises after the run")
         end
+    end,
+
+    -- Review M1: recording the outcome can fail (it allocates: a new key on
+    -- run, the error's text), and Lua then skips the rest of onError. The
+    -- program's <close> handlers must still end after one Stop. Here the
+    -- recording raises "not enough memory" until the handler starts (a
+    -- __newindex on run stands in for the allocator), with the same loop,
+    -- hook and guard as above.
+    close_handler_stops_when_the_outcome_is_lost = function()
+        local F = Fake.new()
+        local run = Sandbox.newRun(F.pc, context())
+        local failing = true
+        setmetatable(run, { __newindex = function(t, k, v)
+            if failing and (k == "ok" or k == "err") then error("not enough memory", 0) end
+            rawset(t, k, v)
+        end })
+        local looping, tries, guarded = false, 0, false
+        run.env.LOOPING = function()
+            failing = false
+            looping = true
+        end
+        debug.sethook(function()
+            if not looping then return end
+            tries = tries + 1
+            if tries > 5 then
+                looping, guarded = false, true
+                error("the guard ended the loop", 0)
+            end
+            looping = false
+            F.menu["Stop program"]()
+            looping = true
+        end, "", 1000)
+        local r = Sandbox.execute(F.pc, run, [[
+            local x <close> = setmetatable({}, { __close = function()
+                LOOPING()
+                while true do end
+            end })
+            error("boom")
+        ]])
+        debug.sethook()
+        T.eq(guarded, false, "Stop never ended the close handler")
+        T.eq(tries, 1, "Stops chosen")
+        T.eq(r.status, "stopped", r.err)
+        T.eq(run.over, true)
     end,
 
     -- cleanup's release repeats until nothing is tracked: an object added

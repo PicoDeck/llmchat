@@ -956,6 +956,9 @@ function Sandbox.newRun(pc, ctx)
     local run = {
         pc = pc, ctx = ctx, dataDir = trimDir(ctx.dataDir or ""),
         printed = {}, appMenu = {}, exited = false, over = false,
+        -- set later, around the program's xpcall: made now, so that setting
+        -- them then allocates nothing
+        active = false, stopping = false, unwound = false,
         -- this run's own sentinel (a program can rawset fields on it; the
         -- next run never sees them, and never takes it for its own)
         STOP = _setmetatable({}, { __tostring = stopText, __metatable = false }),
@@ -1186,14 +1189,15 @@ local function handler(run, e)
     return safeText(e)
 end
 
--- The program under xpcall, then shut at once (R24). The gate closes and the
--- outcome is recorded inside the protected call (main sets run.over and
--- run.ok; onError sets run.over, run.ok and run.err), so a callback that
--- fires right after the program's last instruction finds it closed, and one
--- that raises right after xpcall returns can't lose the outcome. Memory
--- errors skip the handler: the gate then closes as xpcall returns, and the
--- outcome comes from xpcall. run.unwound is set the moment xpcall returns:
--- the program's <close> handlers have all run, and Stop program is inert.
+-- The program under xpcall, then shut at once (R24). The outcome is recorded
+-- and the gate closes inside the protected call (main sets run.ok, then
+-- run.over; onError sets run.ok and run.err, then run.over), so a callback
+-- that fires once the program is over finds the gate closed, one instruction
+-- after the outcome, and one that raises right after xpcall returns can't
+-- lose the outcome. Memory errors skip the handler: the gate then closes as
+-- xpcall returns, and the outcome comes from xpcall. run.unwound is set the
+-- moment xpcall returns: the program's <close> handlers have all run, and
+-- Stop program is inert.
 local function runThenShut(pc, run, main, onError)
     local ok, err = _xpcall(main, onError)
     run.unwound = true
@@ -1236,45 +1240,50 @@ function Sandbox.execute(pc, run, src)
     blank(d)
     -- "Stop program" (spec 9.5): the callback ends the program by raising
     -- the run's STOP, until its xpcall returns (run.unwound); the item is in
-    -- run.appMenu so the program's own clearMenuItems puts it back. While the
-    -- gate is open, that stops the program. Once it is closed, the program's
+    -- run.appMenu so the program's own clearMenuItems puts it back. Before
+    -- the outcome is recorded, that stops the program. After, the program's
     -- <close> handlers can still run, as its stack unwinds (below): Stop
-    -- raises to end the one running, and the outcome stays as recorded. It
-    -- does nothing in the few instructions between the gate and the outcome,
-    -- which are the runner's own, and nothing once xpcall has returned, so it
-    -- never raises into the chat.
+    -- raises to end the one running, and the outcome stays as recorded. Once
+    -- xpcall has returned it does nothing, so it never raises into the chat.
     local item = { label = "Stop program" }
     function item.fn()
         if not run.active or run.unwound then return end
-        if not run.over then
-            run.stopping = true
-        elseif run.ok == nil then
-            return
-        end
+        if run.ok == nil then run.stopping = true end
         _error(run.STOP, 0)
     end
     run.appMenu[#run.appMenu + 1] = item
     sys.addMenuItem(item.label, item.fn)
-    -- The gate closes the moment the program is over: as its main chunk
-    -- returns, or as its error reaches the runner. onError runs before the
-    -- stack unwinds, so the program's own __close handlers, which run while
-    -- it unwinds, already find it closed; Lua calls onError again for an
-    -- error one of them raises (a Stop included), and the first outcome
-    -- stays.
+    -- The outcome is recorded, then the gate closes, the moment the program
+    -- is over: as its main chunk returns, or as its error reaches the
+    -- runner. onError runs before the stack unwinds, so the program's own
+    -- __close handlers, which run while it unwinds, already find the gate
+    -- closed; Lua calls onError again for an error one of them raises (a Stop
+    -- included), and the first outcome stays. Recording can fail (it
+    -- allocates, and a memory error skips the rest of onError): the gate is
+    -- then still open, and the handlers run as part of the run, where Stop
+    -- works as during it.
     local function main()
         fn()
-        run.over = true
         run.ok = true
+        run.over = true
     end
     local function onError(e)
+        if run.ok == nil then run.ok, run.err = false, handler(run, e) end
         run.over = true
-        local v = handler(run, e)
-        if run.ok == nil then run.ok, run.err = false, v end
-        return v
+        return run.err
     end
     local t0 = sys.getTimeMs()
     run.active = true
-    local done, why = _pcall(runThenShut, pc, run, main, onError)
+    -- A Stop chosen in the instruction between xpcall's return and
+    -- run.unwound raises into runThenShut; this call's handler sets the flag
+    -- where it raised, before the call returns, so a second Stop can't
+    -- raise out of execute (review M6). The line after covers an error that
+    -- skips the handler.
+    local done, why = _xpcall(runThenShut, function(e)
+        run.unwound = true
+        return e
+    end, pc, run, main, onError)
+    run.unwound = true
     main, fn = nil, nil -- with run.env (cleanup), the last references to the program
     if not done then
         -- A program's menu item, chosen between the program's end and the
