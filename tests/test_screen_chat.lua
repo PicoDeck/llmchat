@@ -350,6 +350,27 @@ return {
         -- the whole text each time would be about bumps * #text / 2 characters
         T.ok(parsed < 4 * #text, "parsed " .. parsed .. " characters for a " .. #text .. " byte reply")
     end,
+    -- Final review D58: the live layout splits only at blank lines the
+    -- parser also sees outside a fence: ~~~ fences and longer ones count, and
+    -- a ```lua line inside an open fence is code, not a fence.
+    live_split_follows_the_parser_fences = function()
+        local F, app, s = setup()
+        local text = "Intro.\n\n~~~\nfirst\n\nsecond\n~~~\n\n"
+            .. "````md\n```lua\n-- not.lua\nx = 1\n\ny = 2\n```\n````\n\n"
+            .. "```\na\n```lua\nb\n\nc\n```\n\n  ~~~~ txt\nd\n\n~~~\ne\n  ~~~~~  \n\nEnd here.\n\n"
+        local chat = app.chat
+        chat.state, chat.live = "streaming", { text = "" }
+        local parse = Markdown.parse
+        for n = 1, #text do
+            chat.live.text = text:sub(1, n)
+            chat:_bump()
+            app:frame()
+            local e = s.entries[#s.entries]
+            local want = Layout.assistant(parse(text:sub(1, n)), app.fonts, 296, nil)
+            if #want > 0 then T.same(e.rows, want, "rows after " .. n .. " bytes") end
+        end
+    end,
+
     -- Final review M7: an unexpected error in a frame (a bug, a memory
     -- error) is logged and shown, and the app keeps running with the reply
     -- that is arriving and the draft; no key reaches the log or the toast.

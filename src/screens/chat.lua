@@ -166,7 +166,9 @@ end
 
 -- Rows of the live reply (spec 7.4). The text up to its last blank line
 -- outside an open code fence is parsed and laid out once and kept; only the
--- tail after it is laid out again on each bump.
+-- tail after it is laid out again on each bump. Fences follow the parser's
+-- own rule (Markdown.openFence/closesFence on the folded line): st.fence is
+-- the open fence, or false.
 function S:liveRows(text, spec)
     local live, programs = self.chat.live, nil
     local st = self.liveState
@@ -177,10 +179,12 @@ function S:liveRows(text, spec)
     while true do
         local nl = text:find("\n", st.scanned, true)
         if not nl then break end
-        local line = text:sub(st.scanned, nl - 1)
-        if line:match("^%s*```") then
-            st.fence = not st.fence
-        elseif not st.fence and not line:find("%S") then
+        local line = Fold.line(text:sub(st.scanned, nl - 1))
+        if st.fence then
+            if Markdown.closesFence(line, st.fence) then st.fence = false end
+        elseif Markdown.openFence(line) then
+            st.fence = Markdown.openFence(line)
+        elseif not line:find("%S") then
             commit(st, text:sub(st.split, nl - 1), spec, programs)
             st.split = nl + 1
         end

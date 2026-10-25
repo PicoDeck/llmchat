@@ -14,6 +14,23 @@ local M = {}
 
 local function trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
 
+-- The fence rule, in one place for the parser and the chat screen's live
+-- layout (which splits a streaming reply only at blank lines outside a
+-- fence). Lines are folded (fold.line) first.
+-- M.openFence(line) -> fence, info: a line that opens a code block, with its
+-- run of three or more ` or ~ and the info string; nil otherwise.
+function M.openFence(line)
+    local fence, info = line:match("^%s*(```+)%s*(.-)%s*$")
+    if not fence then fence, info = line:match("^%s*(~~~+)%s*(.-)%s*$") end
+    return fence, info
+end
+
+-- M.closesFence(line, fence): the line closes a block opened by `fence`: the
+-- same character, at least as many, and nothing else on the line.
+function M.closesFence(line, fence)
+    return line:match("^%s*" .. fence:sub(1, 1):rep(#fence) .. "+%s*$") ~= nil
+end
+
 -- Whether a closing __ (after a non-space, before a non-word) follows at or after `from`.
 local function underClose(s, from)
     local j = from
@@ -142,15 +159,13 @@ function M.parse(text)
     while i <= n do
         local raw = lines[i]
         local line = fold.line(raw)
-        local fence, info = line:match("^%s*(```+)%s*(.-)%s*$")
-        if not fence then fence, info = line:match("^%s*(~~~+)%s*(.-)%s*$") end
+        local fence, info = M.openFence(line)
         if fence then
             endPara()
             local block = { kind = "code", info = info:match("^%S*"), lines = {}, closed = false }
             i = i + 1
             while i <= n do
-                local l = fold.line(lines[i])
-                if l:match("^%s*" .. fence:sub(1, 1):rep(#fence) .. "+%s*$") then
+                if M.closesFence(fold.line(lines[i]), fence) then
                     block.closed = true
                     break
                 end

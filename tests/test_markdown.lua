@@ -49,6 +49,23 @@ return {
         T.eq(b[2].info, "")
         T.eq(b[3].kind, "p")
     end,
+    -- One fence rule for the parser and the live layout (final review D58).
+    fence_rule = function()
+        T.same({ MD.openFence("```lua") }, { "```", "lua" })
+        T.same({ MD.openFence("  ~~~~ txt ") }, { "~~~~", "txt" })
+        T.eq(MD.openFence("text ```"), nil)
+        T.eq(MD.openFence("~~ x"), nil)
+        T.ok(MD.closesFence("```", "```"))
+        T.ok(MD.closesFence(" ````  ", "```"), "a longer run closes")
+        T.ok(not MD.closesFence("``", "```"), "a shorter one doesn't")
+        T.ok(not MD.closesFence("```lua", "```"), "an info string doesn't")
+        T.ok(not MD.closesFence("~~~", "```"), "the other character doesn't")
+        T.ok(MD.closesFence("~~~~~", "~~~~"))
+        local b = MD.parse("~~~\nx\n\n```lua\n~~~\nafter")
+        T.eq(b[1].kind, "code")
+        T.same(b[1].lines, { "x", "", "```lua" })
+        T.eq(b[2].kind, "p")
+    end,
     tabs_in_code = function()
         local b = MD.parse("```\n\tx\n```")
         T.eq(b[1].lines[1], "    x")
