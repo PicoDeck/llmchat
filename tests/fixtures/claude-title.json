@@ -1,0 +1,2 @@
+: provisional, hand-written from api-facts.md; replace by tools/record_stream.py
+{"id":"msg_fixture","type":"message","role":"assistant","model":"claude-haiku-5-5","content":[{"type":"thinking","thinking":"","signature":"EqQBCgIYAhIMfixtureSignatureAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="},{"type":"text","text":"Cups in a litre"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":60,"output_tokens":9}}

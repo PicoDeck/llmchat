@@ -1,0 +1,2 @@
+: provisional, hand-written from api-facts.md; replace by tools/record_stream.py
+{"id":"resp_fixture","object":"response","status":"completed","model":"gpt-6-luna","output":[{"type":"message","id":"msg_fixture","role":"assistant","content":[{"type":"output_text","text":"Cups in a litre","annotations":[]}]}],"usage":{"input_tokens":60,"output_tokens":6,"total_tokens":66}}

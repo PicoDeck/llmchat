@@ -1,0 +1,192 @@
+#!/usr/bin/env python3
+"""Record a real API reply as a test fixture.
+
+    tools/record_stream.py <claude|openai> <case> [--dry-run]
+
+Cases: text, thinking (claude) / reasoning (openai), maxtokens (claude) /
+incomplete (openai), title, 401.
+
+Keys are read only from ~/.config/llmchat/keys.txt (lines `claude=...` and
+`openai=...`) and are never printed. --dry-run prints the request (URL,
+headers with the key replaced by <key>, body) and sends nothing.
+
+The raw response is saved to tests/fixtures/<provider>-<case>.sse (or .json
+for title and 401; an error reply gets a leading `#status N` line), with
+msg_/resp_/req_ ids replaced by <prefix>_fixture and sk-... strings removed.
+Usage and cost are appended to docs/research/api-spend.md from the spec's
+price tables.
+"""
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.request
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FIXTURES = os.path.join(ROOT, "tests", "fixtures")
+SPEND = os.path.join(ROOT, "docs", "research", "api-spend.md")
+KEYS = os.path.expanduser("~/.config/llmchat/keys.txt")
+
+SYSTEM = "You are a concise assistant. Keep answers short."
+TITLE_PROMPT = ("Write a title of 2 to 5 words for this chat. Reply with the title only.\n\n"
+                "how many cups in a litre?\n\nA litre is about 4.2 cups.")
+QUESTION = "In one sentence: why is the sky blue?"
+MATH = "What is 17*23? Think it through."
+
+# $/MTok in, out (spec 6.2, 6.3)
+PRICES = {
+    "claude-opus-5-5": (4, 20), "claude-sonnet-5-5": (2, 10),
+    "claude-haiku-5-5": (0.10, 0.50), "claude-fable-5-1": (10, 50),
+    "gpt-6-luna": (0.10, 0.50), "gpt-6.1-sol": (2, 10), "gpt-6-astra": (10, 50),
+}
+
+
+def claude_request(case):
+    url = "https://api.anthropic.com/v1/messages"
+    headers = {"content-type": "application/json", "x-api-key": "<key>",
+               "anthropic-version": "2026-10-21"}
+    body = {"model": "claude-opus-5-5", "max_tokens": 32000, "stream": True,
+            "cache_control": {"type": "ephemeral"}, "system": SYSTEM,
+            "output_config": {"effort": "low"},
+            "messages": [{"role": "user", "content": QUESTION}]}
+    if case == "thinking":
+        body["model"] = "claude-haiku-5-5"
+        body["output_config"] = {"effort": "high"}
+        body["messages"] = [{"role": "user", "content": MATH}]
+    elif case == "maxtokens":
+        body["max_tokens"] = 20
+    elif case == "title":
+        body = {"model": "claude-haiku-5-5", "max_tokens": 200,
+                "output_config": {"effort": "low"},
+                "messages": [{"role": "user", "content": TITLE_PROMPT}]}
+    elif case == "401":
+        body["max_tokens"] = 20
+    elif case != "text":
+        raise SystemExit("unknown claude case: " + case)
+    if case in ("text", "thinking", "maxtokens", "401") and body["model"] != "claude-haiku-5-5":
+        # Opus 5.5 / Sonnet 5.5 / Fable 5.1 get server-side fallback (spec 6.2)
+        body["fallbacks"] = "default"
+        headers["anthropic-beta"] = "server-side-fallback-2026-07-01"
+    return url, headers, body
+
+
+def openai_request(case):
+    url = "https://api.openai.com/v1/responses"
+    headers = {"Authorization": "Bearer <key>", "Content-Type": "application/json"}
+    body = {"model": "gpt-6-luna", "instructions": SYSTEM,
+            "input": [{"role": "user", "content": QUESTION}],
+            "stream": True, "store": False, "max_output_tokens": 32000,
+            "reasoning": {"effort": "none"},
+            "stream_options": {"include_obfuscation": False}}
+    if case == "reasoning":
+        body["reasoning"] = {"effort": "medium"}
+        body["input"] = [{"role": "user", "content": MATH}]
+    elif case == "incomplete":
+        body["max_output_tokens"] = 20
+    elif case == "title":
+        body = {"model": "gpt-6-luna", "input": [{"role": "user", "content": TITLE_PROMPT}],
+                "store": False, "max_output_tokens": 64, "reasoning": {"effort": "none"}}
+    elif case == "401":
+        body["max_output_tokens"] = 20
+    elif case != "text":
+        raise SystemExit("unknown openai case: " + case)
+    return url, headers, body
+
+
+def build(provider, case):
+    if provider == "claude":
+        return claude_request(case)
+    if provider == "openai":
+        return openai_request(case)
+    raise SystemExit("provider must be claude or openai")
+
+
+def load_key(provider):
+    try:
+        with open(KEYS) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    if k.strip() == provider and v.strip():
+                        return v.strip()
+    except OSError:
+        pass
+    raise SystemExit("no %s key in %s" % (provider, KEYS))
+
+
+def scrub(text):
+    text = re.sub(r"\b(msg|resp|req)_[A-Za-z0-9]+", r"\1_fixture", text)
+    return re.sub(r"sk-[A-Za-z0-9_\-]+", "<removed>", text)
+
+
+def post(provider, case, key):
+    url, headers, body = build(provider, case)
+    headers = {k: v.replace("<key>", key) for k, v in headers.items()}
+    req = urllib.request.Request(url, json.dumps(body).encode(), headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            return r.status, r.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8")
+
+
+def usage_of(provider, text):
+    """(input_tokens, output_tokens, model) from a saved reply, or None."""
+    inp = out = 0
+    model = ""
+    if text.lstrip().startswith("{"):
+        objs = [json.loads(text)]
+    else:
+        objs = [json.loads(m) for m in re.findall(r"^data: (\{.*\})$", text, re.M)]
+    for o in objs:
+        r = o.get("message") or o.get("response") or o
+        model = r.get("model", model) if isinstance(r, dict) else model
+        for u in (r.get("usage") if isinstance(r, dict) else None), o.get("usage"):
+            if isinstance(u, dict):
+                inp = u.get("input_tokens", inp) or inp
+                out = u.get("output_tokens", out) or out
+    return inp, out, model
+
+
+def log_spend(provider, case, text):
+    try:
+        inp, out, model = usage_of(provider, text)
+    except (ValueError, KeyError):
+        return
+    pin, pout = PRICES.get(model, (0, 0))
+    cost = (inp * pin + out * pout) / 1e6
+    os.makedirs(os.path.dirname(SPEND), exist_ok=True)
+    with open(SPEND, "a") as f:
+        f.write("| %s-%s | %s | %d | %d | $%.4f |\n" % (provider, case, model, inp, out, cost))
+    print("spend: $%.4f (%d in, %d out, %s)" % (cost, inp, out, model))
+
+
+def main(argv):
+    args = [a for a in argv if not a.startswith("--")]
+    dry = "--dry-run" in argv
+    if len(args) != 2:
+        raise SystemExit(__doc__)
+    provider, case = args
+    url, headers, body = build(provider, case)
+    if dry:
+        print("POST " + url)
+        for k, v in headers.items():
+            print("%s: %s" % (k, v))
+        print(json.dumps(body, indent=2))
+        return
+    key = "bad-key" if case == "401" else load_key(provider)
+    status, text = post(provider, case, key)
+    text = scrub(text.replace(key, "<removed>"))
+    is_json = case in ("title", "401")
+    name = "%s-%s.%s" % (provider, case, "json" if is_json else "sse")
+    head = "#status %d\n" % status if status != 200 else ""
+    with open(os.path.join(FIXTURES, name), "w") as f:
+        f.write(head + text)
+    print("saved %s (HTTP %d, %d bytes)" % (name, status, len(text)))
+    log_spend(provider, case, text)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

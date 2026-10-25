@@ -1,0 +1,56 @@
+local T = require("tests.t")
+local J = require("tests.json")
+local Fixture = require("tests.fixture")
+
+local SSE_FILES = {
+    "claude-text", "claude-thinking", "claude-maxtokens", "claude-refusal.hand",
+    "claude-fallback.hand", "claude-error.hand",
+    "openai-text", "openai-reasoning", "openai-incomplete", "openai-refusal.hand",
+    "openai-failed.hand", "openai-error.hand",
+}
+local JSON_FILES = {
+    { "claude-title", 200 }, { "claude-401", 401 }, { "openai-title", 200 },
+    { "openai-401", 401 }, { "openai-quota.hand", 429 },
+}
+
+return {
+    all_fixtures_parse = function()
+        for _, name in ipairs(SSE_FILES) do
+            local events = Fixture.events(name .. ".sse")
+            T.ok(#events >= 1, name .. " has events")
+            for i, ev in ipairs(events) do
+                if ev.data ~= "[DONE]" then
+                    local v, err = J.decode(ev.data)
+                    T.ok(v ~= nil, name .. " event " .. i .. ": " .. tostring(err))
+                end
+            end
+        end
+    end,
+    json_fixtures = function()
+        for _, f in ipairs(JSON_FILES) do
+            local status, body = Fixture.read(f[1] .. ".json")
+            T.eq(status, f[2], f[1])
+            T.ok(J.decode(body) ~= nil, f[1] .. " decodes")
+        end
+    end,
+    chunks_reassemble = function()
+        local _, body = Fixture.read("claude-text.sse")
+        for _, size in ipairs({ 1, 7, 64 }) do
+            T.eq(table.concat(Fixture.chunks("claude-text.sse", size)), body)
+        end
+        T.eq(#Fixture.chunks("claude-text.sse", 1), #body)
+    end,
+    big_completed_line = function()
+        local found = false
+        for _, ev in ipairs(Fixture.events("openai-text.sse")) do
+            if ev.name == "response.completed" and #ev.data > 65536 then found = true end
+        end
+        T.ok(found, "a response.completed data line over 64 KB")
+    end,
+    no_keys = function()
+        for _, name in ipairs(SSE_FILES) do
+            local _, body = Fixture.read(name .. ".sse")
+            T.ok(not body:find("sk-", 1, true), name)
+        end
+    end,
+}

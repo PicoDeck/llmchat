@@ -1,0 +1,3 @@
+: hand-written from api-facts.md (OpenAI docs, 429 insufficient_quota), spec 6.4
+#status 429
+{"error":{"message":"You exceeded your current quota, please check your plan and billing details.","type":"insufficient_quota","param":null,"code":"credit_balance_exhausted"}}
