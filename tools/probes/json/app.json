@@ -1,0 +1,8 @@
+{
+  "id": "dev.llmchat.probe.json",
+  "name": "JSON probe",
+  "description": "Throwaway probe: cost of picocalc.json.decode on one SSE data line.",
+  "version": "0.0.1",
+  "author": "PicoDeck",
+  "category": "tools"
+}

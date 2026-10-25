@@ -1,0 +1,8 @@
+{
+  "id": "dev.llmchat.probe.stop",
+  "name": "Stop probe",
+  "description": "Throwaway probe: can a system-menu callback end a running loop by raising an error?",
+  "version": "0.0.1",
+  "author": "PicoDeck",
+  "category": "tools"
+}
