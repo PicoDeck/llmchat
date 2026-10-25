@@ -418,4 +418,31 @@ return {
         T.eq(ok, false)
         T.ok(rawequal(err, exit), "the exit was swallowed")
     end,
+
+    -- The report is guarded too: an error raised while the frame reports
+    -- another (out of memory while it builds the text, here from the
+    -- cleanText that errorLine calls) doesn't end the app either, and the
+    -- next frames run. A value that is not a string still goes on up.
+    frame_report_error_contained = function()
+        local F, app, S = setup()
+        local Sandbox = require("src.sandbox")
+        local clean, tick = Sandbox.cleanText, S.tick
+        local raise = "not enough memory"
+        Sandbox.cleanText = function() error(raise, 0) end
+        S.tick = function() error("boom") end
+        local ok, err = pcall(app.frame, app)
+        local exit = {}
+        raise = exit
+        S.tick = function() error("boom again") end -- a new error, so it is reported
+        local okExit, errExit = pcall(app.frame, app)
+        Sandbox.cleanText, S.tick = clean, tick
+        T.ok(ok, "the report's error escaped: " .. tostring(err))
+        T.eq(app.running, true)
+        T.eq(F.font, F.pc.display.FONT_6X8, "6x8 back for the firmware's UI")
+        T.eq(okExit, false, "the report swallowed a value that is not a string")
+        T.ok(rawequal(errExit, exit), "the report swallowed a value that is not a string")
+        local frames = F.frames or 0
+        T.ok(pcall(app.frame, app), "the next frame")
+        T.ok((F.frames or 0) > frames, "the next frame did not run")
+    end,
 }

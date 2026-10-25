@@ -172,17 +172,8 @@ local function errorLine(err, max)
     return (Sandbox.cleanText(s, max):match("^[^\n]*"))
 end
 
--- One pass of the main loop, guarded (final review M7): an unexpected error
--- in it (a bug, a memory error) does not end the app, which would lose the
--- reply that is arriving and the draft. It is logged and shown as a toast
--- (the same message at most once every 5 s), the font is set back to 6x8 for
--- the firmware's UI, and the loop goes on. A value that is not a string goes
--- on up: that is the firmware's exit (Exit App, a light userdata), which is
--- sticky and must close the app as the firmware intends.
-function App:frame()
-    local ok, err = pcall(self.step, self)
-    if ok then return end
-    if type(err) ~= "string" then error(err, 0) end
+-- How App:frame reports an error it caught (below).
+local function report(self, err)
     local pc = self.pc
     pcall(pc.display.setFont, pc.display.FONT_6X8)
     self.dirty = true
@@ -193,7 +184,24 @@ function App:frame()
         pcall(pc.sys.log, "[app] error: " .. errorLine(err, 200))
         pcall(pc.ui.toast, "Something went wrong: " .. errorLine(err, 60))
     end
-    pcall(pc.sys.sleep, 10)
+end
+
+-- One pass of the main loop, guarded (final review M7): an unexpected error
+-- in it (a bug, a memory error) does not end the app, which would lose the
+-- reply that is arriving and the draft. It is logged and shown as a toast
+-- (the same message at most once every 5 s), the font is set back to 6x8 for
+-- the firmware's UI, and the loop goes on. The report is guarded as a whole
+-- too: building its text can fail (out of memory) while it reports another
+-- error. A value that is not a string goes on up, from either: that is the
+-- firmware's exit (Exit App, a light userdata), which is sticky and must
+-- close the app as the firmware intends.
+function App:frame()
+    local ok, err = pcall(self.step, self)
+    if ok then return end
+    if type(err) ~= "string" then error(err, 0) end
+    local okR, errR = pcall(report, self, err)
+    if not okR and type(errR) ~= "string" then error(errR, 0) end
+    pcall(self.pc.sys.sleep, 10)
 end
 
 -- The frame itself (App:frame runs it guarded).
