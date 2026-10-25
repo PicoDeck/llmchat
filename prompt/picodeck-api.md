@@ -84,7 +84,8 @@ This is everything a program gets. The global `picocalc` holds modules; use `loc
 - `picocalc.sys.exit()` ends the program.
 - `picocalc.sys.log(message)` writes a line to the log.
 - `picocalc.sys.getBattery()` gives 0-100, or -1 before the first reading; `picocalc.sys.isUSBPowered()`; `picocalc.sys.getPowerStatus()`.
-- `picocalc.sys.getMemInfo()` gives a table of free and used memory; `picocalc.sys.getClock()` the CPU clock; `picocalc.sys.getVersion()`.
+- `picocalc.sys.getClock()` gives the time of day as a table `{synced, hour, min, sec, epoch}`: hour, min and sec are local time, epoch is UTC seconds, and all are 0 until `synced` is true (the clock is set over WiFi).
+- `picocalc.sys.getMemInfo()` gives a table of free and used memory; `picocalc.sys.getVersion()`.
 - `picocalc.sys.resetIdleTimer()` keeps the screen awake.
 - `picocalc.sys.addMenuItem(label, callback)` and `picocalc.sys.clearMenuItems()` manage the program's items in the system menu.
 - `picocalc.perf.getFPS()`, `picocalc.perf.getFrameTime()`, `picocalc.perf.drawFPS([x, y])`, `picocalc.perf.setTargetFPS(fps)`, with `picocalc.perf.beginFrame()` and `picocalc.perf.endFrame()` around a frame, cap and show the frame rate.

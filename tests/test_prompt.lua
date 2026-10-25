@@ -69,6 +69,18 @@ function M.rules_present()
     end
 end
 
+-- Final review I4: getClock gives the time of day (the firmware's fields),
+-- not the CPU clock; the README offers a clock program.
+function M.get_clock_is_the_time_of_day()
+    local s = slurp("prompt/picodeck-api.md")
+    local line = s:match("[^\n]*picocalc%.sys%.getClock%(%)[^\n]*")
+    T.ok(line, "getClock is not on the sheet")
+    T.ok(not line:find("CPU", 1, true), line)
+    for _, field in ipairs({ "synced", "hour", "min", "sec", "epoch" }) do
+        T.ok(line:find(field, 1, true), "getClock lacks " .. field)
+    end
+end
+
 function M.plain_ascii()
     for _, f in ipairs({ "system.txt", "picodeck-api.md", "example.lua" }) do
         local s = slurp("prompt/" .. f)
