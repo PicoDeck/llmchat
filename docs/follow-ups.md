@@ -22,6 +22,7 @@ Open items left when LLM Chat 2.0 was merged (2026-10-26). The build was reviewe
   - `env.load` reads a reader function's whole chunk itself, then loads the string, so an error in the reader no longer runs the runner's message handler and closes the gate early.
   - `callbackOf` returns early once `run.stopping` is set, so after one Stop no program callback runs again.
 - `tools/record_stream.py` doesn't scrub `call_` ids (OpenAI function-call ids).
+- picodeck: Exit App during a slowed write leaves the SD bus at 1 MHz after the app exits. Once exit is requested, the firmware re-raises it before every Lua instruction, so the app's reset never runs, and the exit teardown doesn't restore the SD clock (only boot, a remount and a CPU clock change do). It is slow but safe, and most likely during the save at send. The firmware's store, updater and `download.lua` have the same gap. Fix in picodeck: call `sd_set_slow_mode(false)` in the Lua runner's teardown.
 - CI runs the tests under one Lua only. Add a job for `build/lua32`, the 32-bit-number build the device matches. `proxied_types_match_firmware` and the two download-library tests check nothing when `PICODECK_ROOT` is unset, so give CI a picodeck checkout.
 - Possible slowness on the device:
   - The Markdown parser rescans quadratically on an unmatched `[`: 20,000 `[a` took 11 s on the host, and the parse reruns while streaming (`src/markdown.lua`).
