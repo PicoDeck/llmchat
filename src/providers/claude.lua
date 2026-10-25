@@ -35,17 +35,43 @@ local function headers(key)
     }
 end
 
--- Neutral items to API messages. Notes and empty replies are skipped; a
--- Claude reply with raw blocks goes back as those blocks, anything else as text.
+local function hasText(s) return type(s) == "string" and s:find("%S") ~= nil end
+
+-- A reply's raw blocks as they can be echoed: Claude rejects a text block
+-- that is empty or only whitespace, so those are dropped. nil when nothing
+-- but thinking is left (nothing to answer to).
+local function echoBlocks(raw)
+    local out, said = {}, false
+    for _, b in ipairs(raw) do
+        local kind = type(b) == "table" and b.type
+        if kind == "text" then
+            if hasText(b.text) then
+                out[#out + 1] = b
+                said = true
+            end
+        else
+            out[#out + 1] = b
+            if kind ~= "thinking" and kind ~= "redacted_thinking" then said = true end
+        end
+    end
+    return said and out or nil
+end
+
+-- Neutral items to API messages. Notes and replies with nothing but
+-- whitespace are skipped (history is append-only: one rejected block would
+-- fail every later request); a Claude reply with raw blocks goes back as
+-- those blocks, anything else as text.
 local function messages(items)
     local out = {}
     for _, it in ipairs(items) do
         if it.role == "user" then
             out[#out + 1] = { role = "user", content = it.text or "" }
         elseif it.role == "assistant" then
-            if it.provider == "claude" and it.raw and #it.raw > 0 then
-                out[#out + 1] = { role = "assistant", content = it.raw }
-            elseif it.text and it.text ~= "" then
+            local blocks = it.provider == "claude" and type(it.raw) == "table" and #it.raw > 0
+                and echoBlocks(it.raw)
+            if blocks then
+                out[#out + 1] = { role = "assistant", content = blocks }
+            elseif hasText(it.text) then
                 out[#out + 1] = { role = "assistant", content = it.text }
             end
         end

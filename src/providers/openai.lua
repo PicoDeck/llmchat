@@ -35,13 +35,13 @@ local function effortValue(model, effort)
 end
 
 -- Every reply goes back as plain text (no reasoning items, no raw). Notes and
--- empty replies are skipped.
+-- replies with nothing but whitespace are skipped.
 local function input(items)
     local out = {}
     for _, it in ipairs(items) do
         if it.role == "user" then
             out[#out + 1] = { role = "user", content = it.text or "" }
-        elseif it.role == "assistant" and it.text and it.text ~= "" then
+        elseif it.role == "assistant" and type(it.text) == "string" and it.text:find("%S") then
             out[#out + 1] = { role = "assistant", content = it.text }
         end
     end

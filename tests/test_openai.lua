@@ -66,6 +66,7 @@ return {
             { role = "assistant", provider = "openai", text = "c" },
             { role = "assistant", provider = "openai", text = "d", stopped = true },
             { role = "assistant", provider = "openai", text = "" },
+            { role = "assistant", provider = "openai", text = " \n\t" }, -- only whitespace (M3)
             { role = "user", text = "e" },
         }
         local _, _, body = P.request(J, items, { key = "k", model = "gpt-6-luna", effort = "low", system = "S" })

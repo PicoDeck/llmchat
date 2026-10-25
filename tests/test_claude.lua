@@ -37,6 +37,35 @@ return {
             cache_control = { type = "ephemeral" }, system = "SYS", output_config = { effort = "low" },
             fallbacks = "default", messages = { { role = "user", content = "hi" } } })
     end,
+    -- Final review M3: Claude rejects a text block that is empty or only
+    -- whitespace, and history is append-only, so one would fail every later
+    -- request. Such blocks are never echoed, and a reply left with nothing
+    -- to send (only whitespace, or only thinking) is skipped.
+    whitespace_never_echoed = function()
+        local think = { type = "thinking", thinking = "", signature = "s" }
+        local items = {
+            { role = "user", text = "a" },
+            { role = "assistant", provider = "claude", text = "b",
+              raw = { think, { type = "text", text = "" }, { type = "text", text = "b" } } },
+            { role = "user", text = "c" },
+            { role = "assistant", provider = "claude", text = "  \n", raw = { think, { type = "text", text = " \n " } } },
+            { role = "user", text = "d" },
+            { role = "assistant", provider = "openai", text = " \t " },
+            { role = "user", text = "e" },
+            { role = "assistant", provider = "claude", text = "\n", stopped = true },
+            { role = "user", text = "f" },
+        }
+        local _, _, body = P.request(J, items, { key = "k", model = "claude-opus-5-5", effort = "low", system = "S" })
+        T.same(J.decode(body).messages, {
+            { role = "user", content = "a" },
+            { role = "assistant", content = { think, { type = "text", text = "b" } } },
+            { role = "user", content = "c" },
+            { role = "user", content = "d" },
+            { role = "user", content = "e" },
+            { role = "user", content = "f" },
+        })
+    end,
+
     haiku_has_no_fallbacks = function()
         local _, h, body = P.request(J, { { role = "user", text = "hi" } },
             { key = "k", model = "claude-haiku-5-5", effort = "low", system = "SYS" })

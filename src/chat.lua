@@ -27,6 +27,10 @@ function Chat:_bump() self.version = self.version + 1 end
 
 local function trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
 
+-- Text worth keeping as a reply: a reply of only whitespace is not kept (it
+-- would be echoed to the provider, which may reject it).
+local function hasText(s) return s ~= nil and s:find("%S") ~= nil end
+
 function Chat:provider()
     local prefs = self.deps.store:prefs()
     return self.deps.providers[prefs.provider] or self.deps.providers.claude
@@ -304,7 +308,7 @@ function Chat:_finishFailed(noteText)
     local live = self.live
     self.state, self.live = "idle", nil
     self.req, self.sse, self.parserFeed = nil, nil, nil
-    if live and live.text ~= "" then
+    if live and hasText(live.text) then
         self.items[#self.items + 1] = {
             role = "assistant", provider = self.providerId, model = self.model,
             text = live.text, stopped = true,
@@ -321,7 +325,7 @@ function Chat:stop()
     if self.req then self.req:cancel() end
     self.state, self.live = "idle", nil
     self.req, self.sse, self.parserFeed, self.retryAt = nil, nil, nil, nil
-    if live and live.text ~= "" then
+    if live and hasText(live.text) then
         local item = {
             role = "assistant", provider = self.providerId, model = self.model,
             text = live.text, stopped = true,

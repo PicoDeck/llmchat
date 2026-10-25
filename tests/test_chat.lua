@@ -143,6 +143,23 @@ return {
         T.eq(#store:loadChat(chat.id).items, 2)
     end,
 
+    -- Final review M3: a partial reply that is only whitespace is not kept
+    -- (stopped, or cut off by an error): it would be echoed to the provider.
+    whitespace_partial_not_kept = function()
+        local F, chat = setup({ responder = routing("claude-text.sse") })
+        chat:open(nil)
+        chat:send("hi")
+        chat.live.text = " \n\t "
+        chat:stop()
+        T.eq(#chat.items, 2)
+        T.eq(chat.items[1].role, "user")
+        T.eq(chat.items[2].text, "Reply stopped")
+        chat:send("again")
+        chat.live.text = "  "
+        chat:_finishFailed("Connection lost; the reply is incomplete.")
+        for _, it in ipairs(chat.items) do T.ok(it.role ~= "assistant", "a whitespace reply was kept") end
+    end,
+
     blank_and_double_send = function()
         local F, chat = setup({ responder = routing("claude-text.sse") })
         chat:open(nil)
