@@ -158,6 +158,25 @@ return {
         cfg = { llmchat_provider = "3", llmchat_api_key = "x" }
         T.eq(s2:importOld(config), false)
         T.same(s2:keys(), {})
+        T.eq(cfg.llmchat_api_key, nil)
+        T.eq(cfg.llmchat_provider, nil)
+        T.eq(s2:importOld(config), false)
+    end,
+    keys_recovered_from_tmp = function()
+        local s, fs, files = mk()
+        files[D .. "/keys.txt.tmp"] = "claude=a\nopenai=b\n"
+        T.same(s:keys(), { claude = "a", openai = "b" })
+        T.ok(fs.exists(D .. "/keys.txt"))
+        T.ok(not fs.exists(D .. "/keys.txt.tmp"))
+    end,
+    import_aborts_without_clearing_when_write_fails = function()
+        local s, fs = mk()
+        local cfg = { llmchat_provider = "2", llmchat_api_key = "k" }
+        local config = { get = function(k) return cfg[k] end, set = function(k, v) cfg[k] = v end,
+                         save = function() return true end }
+        fs.failWrite = true
+        T.eq(s:importOld(config), false)
+        T.eq(cfg.llmchat_api_key, "k")
     end,
     cap_50_keeps_newest = function()
         local s, fs = mk()

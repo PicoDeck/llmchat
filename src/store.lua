@@ -64,8 +64,10 @@ local function setAside(fs, p)
     if not fs.rename(p, p .. ".bad") then pcall(fs.delete, p) end
 end
 
-function Store:readJSON(rel)
-    local fs, json = self.fs, self.json
+-- Returns text, src, fromTmp. If <rel> is missing but <rel>.tmp exists, the
+-- text comes from the tmp (a save cut between delete and rename).
+function Store:locate(rel)
+    local fs = self.fs
     local p = self:path(rel)
     local tmp = p .. ".tmp"
     local fromTmp = false
@@ -76,12 +78,26 @@ function Store:readJSON(rel)
     local src = fromTmp and tmp or p
     local text = fs.readFile(src)
     if text == nil then return nil end -- unreadable, not necessarily corrupt
+    return text, src, fromTmp
+end
+
+-- Plain text read with .tmp recovery (finishes the rename).
+function Store:readText(rel)
+    local text, src, fromTmp = self:locate(rel)
+    if text and fromTmp then self.fs.rename(src, self:path(rel)) end
+    return text
+end
+
+function Store:readJSON(rel)
+    local fs, json = self.fs, self.json
+    local text, src, fromTmp = self:locate(rel)
+    if text == nil then return nil end
     local ok, v = pcall(json.decode, text)
     if not ok or v == nil or json.isNull and json.isNull(v) then
         setAside(fs, src)
         return nil
     end
-    if fromTmp then fs.rename(tmp, p) end
+    if fromTmp then fs.rename(src, self:path(rel)) end
     return v
 end
 
@@ -143,7 +159,7 @@ local function trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
 function Store:keys()
     if self._keys then return self._keys end
     local keys = {}
-    local text = self.fs.readFile(self:path("keys.txt"))
+    local text = self:readText("keys.txt")
     if type(text) == "string" then
         for line in (text .. "\n"):gmatch("([^\r\n]*)[\r\n]") do
             line = trim(line)
@@ -179,10 +195,9 @@ function Store:importOld(config)
     if type(key) ~= "string" or key == "" then return false end
     local prov = config.get("llmchat_provider")
     local name = ({ ["1"] = "openai", ["2"] = "claude" })[tostring(prov)]
-    if not name then return false end
     local imported = false
-    if not self:keys()[name] then
-        if not self:setKey(name, key) then return false end
+    if name and not self:keys()[name] then
+        if not self:setKey(name, key) then return false end -- abort, keep old keys
         imported = true
     end
     config.set("llmchat_api_key", nil)
