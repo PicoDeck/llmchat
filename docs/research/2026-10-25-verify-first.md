@@ -17,10 +17,13 @@ The app registers the menu item `Stop probe` (callback: `error(STOP)`, `STOP` a 
 
 After `C caught` the app logged `done` and returned to the launcher. Simulator health check: no problems. No case ended with `other:`.
 
-Observations for Task 15:
-- On the device, from the tight loop (case A) the menu took several seconds to appear: with a 1.5 s wait after the `menu` key, the Enter was lost (the screenshot then showed the menu open with `Stop probe` selected). Pressing Enter again, then waiting 5 s after `menu` in the later cases, worked. This is key timing in the harness, not a failure of the error path; a person simply sees the menu and chooses the item.
-- The item is first in the system menu (above Battery/PSRAM/Settings...).
-- The error unwinds to the `xpcall` that wraps the running program, as 9.5 expects. A program with its own `pcall` can still swallow it (9.7); not tested.
+Procedure (exactly what `tools/probes/drive.py` does): launch, wait for `<case> running` in `/data/dev.llmchat.probe.stop/results.txt`, send the `menu` key, then up to 3 times: wait, press Enter (first menu item is the app's "Stop probe"), poll up to 4 s for `<case> caught` or `<case> other`. The first key waits for 9 s after launch on the device (1 s on the simulator; keys within ~8 s of a launch are dropped on the device). The wait before each Enter is 5 s on the device and 1.5 s on the simulator. If a case gets no result after 3 presses the driver stops. On the device a `finally` then sends `exit`, and removes `/apps/.dev/<probe>` and `/data/dev.llmchat.probe.*`, warning if a step fails. The first device run used a single Enter 1.5 s after `menu` (lost), then a manual Enter; the final script run (5 s wait, retries) got all three on the first press.
+
+What this shows: the error raised by the menu callback reaches the probe's own `xpcall` around the looping function, in all three loops. That is the shape Task 15's runner will use (an `xpcall` around the program). It does not show anything about code that has its own `pcall`.
+
+## Note for Task 15
+- A program that wraps its work in its own `pcall` can swallow the STOP error (spec 9.7). Not tested here; the system menu's Exit App remains the last resort.
+- On the device the menu takes several seconds to open from a tight loop: wait about 5 s after the menu key before choosing the item.
 
 No BLOCKER for Task 15.
 

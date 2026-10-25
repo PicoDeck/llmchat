@@ -35,22 +35,60 @@ def wait_line(t, which, text, timeout):
     return False
 
 
-def drive_stop(t, settle):
-    t.delete_file(f"/data/{IDS['stop']}/results.txt")
-    print("launch", t.launch_app(NAMES["stop"]))
+def choose_item(t, case, menu_wait, tries=3):
+    """Open the system menu and press Enter on its first item (the app's
+    "Stop probe"), re-pressing Enter up to `tries` times, `menu_wait` s apart,
+    until the case logs `caught` or `other`. Returns the case's result line."""
+    t.keypress("menu")
+    for _ in range(tries):
+        time.sleep(menu_wait)  # from a tight loop the menu takes seconds to open
+        t.keypress("enter")
+        end = time.monotonic() + 4
+        while time.monotonic() < end:
+            for l in results(t, "stop"):
+                if l.startswith(f"{case} caught") or l.startswith(f"{case} other"):
+                    return l
+            time.sleep(0.5)
+    return None
+
+
+def drive_stop(t, settle, menu_wait):
+    """The app is already launched. `settle`: wait before the first key (keys
+    within ~8 s of a launch are dropped on the device)."""
+    time.sleep(settle)
     for case in "ABC":
         if not wait_line(t, "stop", f"{case} running", 30):
             print(case, "never started", results(t, "stop")); return
-        time.sleep(settle)  # keys within ~8 s of launch are dropped on the device
-        t.keypress("menu")
-        time.sleep(1.5)
-        t.keypress("enter")  # first menu item is the app's "Stop probe"
-        nxt = {"A": "B running", "B": "C running", "C": "done"}[case]
-        ok = wait_line(t, "stop", nxt, 20)
-        print(case, "->", "advanced" if ok else "NO PROGRESS (still looping?)")
-        if not ok:
+        r = choose_item(t, case, menu_wait)
+        print(case, "->", r or "NO RESULT after 3 Enter presses (STOP does not work?)")
+        if not r:
             break
     print("RESULTS:", results(t, "stop"))
+
+
+def cleanup_hw(t, which):
+    """Leave the device at the launcher with no probe files; warn on failure."""
+    try:
+        print("cleanup exit:", t.command("exit", timeout=3.0))
+        end = time.monotonic() + 15
+        while time.monotonic() < end and t.status()["app"] != "launcher":
+            time.sleep(1)
+        if t.status()["app"] != "launcher":
+            print("WARNING: app still running; use Sym -> Exit App or reboot")
+    except Exception as e:
+        print("WARNING: could not exit the app:", e)
+    for path in (f"/apps/.dev/{NAMES[which]}", f"/data/{IDS[which]}"):
+        try:
+            print(t.command(f"rm {path}", 10.0)[-1])
+        except Exception as e:
+            print("WARNING: could not remove", path, e)
+
+
+def delete_quiet(t, path):
+    try:
+        t.delete_file(path)
+    except Exception:
+        pass
 
 
 def main():
@@ -68,7 +106,7 @@ def main():
             t = hw_target.SimTarget(sim)
             t.push_app(HERE / which, NAMES[which], hidden=True)
             if which == "stop":
-                drive_stop(t, 1.0)
+                t.launch_app(NAMES["stop"]); drive_stop(t, 1.0, 1.5)
             else:
                 t.launch_app(NAMES[which]); time.sleep(3); print(results(t, which))
         finally:
@@ -82,28 +120,16 @@ def main():
         print("status", t.status())
         out = asyncio.run(pm.push_app(str(HERE / which), NAMES[which], device=port, hidden="dev"))
         print(out.splitlines()[0])
-        t.delete_file(f"/data/{IDS[which]}/results.txt")
-        lines = t.command(f"launch .dev/{NAMES[which]}", timeout=10.0)
-        print("launch", lines)
-        if which == "stop":
-            time.sleep(9)
-            drive_stop_hw(t)
-        else:
-            time.sleep(10); print("RESULTS:", results(t, "json"))
+        try:
+            delete_quiet(t, f"/data/{IDS[which]}/results.txt")
+            print("launch", t.command(f"launch .dev/{NAMES[which]}", timeout=10.0))
+            if which == "stop":
+                drive_stop(t, 9, 5)
+            else:
+                time.sleep(10); print("RESULTS:", results(t, "json"))
+        finally:
+            cleanup_hw(t, which)
 
-
-def drive_stop_hw(t):
-    # app already launched; reuse the case loop without relaunching
-    for case in "ABC":
-        if not wait_line(t, "stop", f"{case} running", 30):
-            print(case, "never started", results(t, "stop")); return
-        t.keypress("menu"); time.sleep(5); t.keypress("enter")  # menu takes seconds to open from a tight loop
-        nxt = {"A": "B running", "B": "C running", "C": "done"}[case]
-        ok = wait_line(t, "stop", nxt, 20)
-        print(case, "->", "advanced" if ok else "NO PROGRESS")
-        if not ok:
-            break
-    print("RESULTS:", results(t, "stop"))
 
 
 main()
