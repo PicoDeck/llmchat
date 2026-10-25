@@ -20,7 +20,7 @@ function M.new()
     local F = {
         texts = {}, textFonts = {}, textXs = {}, logs = {}, toasts = {}, menu = {}, events = {}, inputs = {}, confirms = {},
         requests = {}, pending = {}, streaming = {}, config = {}, conns = 0, made = {},
-        rects = {}, spinners = {}, areas = {}, textYs = {}, fontFiles = {}, missingFonts = {}, nextFontId = 4,
+        rects = {}, spinners = {}, areas = {}, fields = {}, radios = {}, outlines = {}, textYs = {}, fontFiles = {}, missingFonts = {}, nextFontId = 4,
         netStatus = 1, clockSynced = true, epoch = 1792000000, ms = 0,
     }
     local fs, files = fakes.fs()
@@ -190,12 +190,17 @@ function M.new()
     end
     function display.clear()
         F.texts, F.textFonts, F.rects, F.textXs, F.textYs = {}, {}, {}, {}, {}
-        F.spinners, F.areas = {}, {}
+        F.spinners, F.areas, F.fields, F.radios, F.outlines = {}, {}, {}, {}, {}
         F.clears = (F.clears or 0) + 1
     end
     -- The clip rect is recorded (F.clip, nil when full screen), not applied.
     function display.setClipRect(x, y, w, h) F.clip = { x = x, y = y, w = w, h = h } end
     function display.clearClipRect() F.clip = nil end
+    -- Outlines are recorded apart from fills (F.outlines).
+    function display.drawRect(x, y, w, h, c)
+        F.outlines = F.outlines or {}
+        F.outlines[#F.outlines + 1] = { x = x, y = y, w = w, h = h, c = c }
+    end
     function display.setFont(id) F.font = id end
     function display.getFont() return F.font end
     function display.fillRect(x, y, w, h, c) F.rects[#F.rects + 1] = { x = x, y = y, w = w, h = h, c = c } end
@@ -211,6 +216,26 @@ function M.new()
         return active, 21
     end
     function ui.drawListItem(_, _, _, text, selected) record((selected and "[>] " or "[ ] ") .. text) end
+    -- The field's text is recorded as drawn (F.fields has the rest).
+    function ui.drawTextField(x, y, w, text, cursor, scroll, focused, showCursor)
+        record(text)
+        F.fields[#F.fields + 1] = { x = x, y = y, w = w, text = text, focused = focused }
+    end
+    function ui.drawRadio(x, y, selected, focused)
+        F.radios[#F.radios + 1] = { x = x, y = y, selected = selected, focused = focused }
+    end
+    function ui.drawDivider() end
+    -- Word wrap to maxCols: the 0-based start offset of each row, and their number.
+    function ui.wrapText(text, maxCols)
+        local segs, start = { 0 }, 0
+        while #text - start > maxCols do
+            local cut = text:sub(start + 1, start + maxCols + 1):match("^.*() ") -- last space
+            local n = (cut and cut > 1) and cut or maxCols
+            start = start + n
+            segs[#segs + 1] = start
+        end
+        return segs, #segs
+    end
     function ui.drawSpinner(x, y, r, frame) F.spinners[#F.spinners + 1] = { x = x, y = y, r = r, frame = frame } end
     -- Records the widget's call (F.areas); the text is not added to F.texts.
     function ui.drawTextArea(x, y, w, h, text, segments, scrollY, row, col, focused, cursor)

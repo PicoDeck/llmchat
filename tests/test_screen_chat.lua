@@ -225,7 +225,7 @@ return {
         local F, app = setup()
         F.key("f1"); frames(app)
         T.eq(app.screenName, "lists")
-        T.ok(has(F, "[H] Recent chats"))
+        T.ok(has(F, "[H] LLM Chat"))
         F.key("esc"); frames(app)
         T.eq(app.screenName, "chat")
         F.key("f5"); frames(app)
