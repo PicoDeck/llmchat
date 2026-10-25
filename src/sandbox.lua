@@ -169,6 +169,8 @@ Sandbox.RESETS = {
     volume = "audio.setVolume(100)",
     stream = "audio.stopStream()",
     fps = "perf.setTargetFPS(0)",
+    slowmode = "fs.setSlowMode(false), the firmware's default (25 MHz): it can't "
+        .. "report the mode to put back, and the chat never sets it",
 }
 
 function Sandbox.lockStrings()
@@ -1018,6 +1020,11 @@ Sandbox.UNDO = {
     volume = function(pc) try(pc.audio, "setVolume", 100) end,
     stream = function(pc) try(pc.audio, "stopStream") end,
     fps = function(pc) try(pc.perf, "setTargetFPS", 0) end,
+    -- The SD bus at full speed again: a download the program never finished
+    -- (stopped, or ended by an error) leaves it in slow mode. The firmware
+    -- has no getter, so this is its default, not a saved state (compare
+    -- brightness above).
+    slowmode = function(pc) try(pc.fs, "setSlowMode", false) end,
 }
 local UNDO = Sandbox.UNDO
 

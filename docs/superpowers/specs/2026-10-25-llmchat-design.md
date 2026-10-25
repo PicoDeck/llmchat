@@ -478,7 +478,7 @@ Overrides:
 The firmware's launcher resets a list of things between apps (`src/os/CLAUDE.md`, "Exit teardown"). A program never exits the app, so the runner does the Lua-visible equivalent itself:
 - **Display:** `clearClipRect()`, scroll offset 0 and the full scroll area, the chat's font, and the brightness saved before the run.
 - **Fonts:** unload every font the program loaded.
-- **Files:** close every tracked handle.
+- **Files:** close every tracked handle. Set the SD card's bus back to full speed (`fs.setSlowMode(false)`, the firmware's default, as it can't report the mode): the download library slows it while it writes, and a program can end mid-transfer.
 - **Network:** close every tracked HTTP connection and TCP socket.
 - **Audio:** stop tones, players and streams.
 - **System:** resume background work if the program paused it (`sys.pauseBackground`); reset the frame-rate target (`perf`); remove the sprite display list (`graphics.sprite.removeAll()`).

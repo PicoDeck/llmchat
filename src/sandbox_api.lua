@@ -31,14 +31,14 @@
 -- fs         get    open, read, write, close, seek, tell, fsize, exists,
 --                   readFile, size, isDir, listDir, mkdir, appPath, copy,
 --                   delete, deleteRecursive, rename, stat, glob, diskInfo,
---                   ensureReady
+--                   ensureReady, setSlowMode
 --            path   every path argument: open, exists, readFile, size, isDir,
 --                   listDir, mkdir, appPath, copy (both), delete,
 --                   deleteRecursive, rename (both), stat, glob
 --            state  open T file. appPath W (in the program's folder). copy C
---                   (its progress function, arg 3).
---            denied browse (a file browser over the card), setSlowMode (the SD
---                   bus speed)
+--                   (its progress function, arg 3). setSlowMode R (the SD
+--                   bus speed, for the whole device)
+--            denied browse (a file browser over the card)
 -- config,    get    get, set, save, load, clear, reset
 -- appconfig  state  W: one store of the program's own, <data>/config.json
 -- sysconfig  denied get, set, load, save (system settings, the WiFi password
@@ -197,7 +197,11 @@ AUDIT.fs = {
     stat = { path = { 1 } },
     glob = { path = { 1 } },
     diskInfo = {}, ensureReady = {},
-    setSlowMode = { deny = "changes the SD card's bus speed for the whole device" },
+    -- The download library (spec 9.3) writes under setSlowMode(true): while
+    -- the WiFi radio is active its EMI corrupts SD writes at the full 25 MHz,
+    -- so SPI0 drops to 1 MHz (picodeck's sd_set_slow_mode). It is the whole
+    -- device's bus speed, so cleanup sets it back.
+    setSlowMode = { reset = "slowmode" },
 }
 
 local function programConfig()

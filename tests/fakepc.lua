@@ -23,6 +23,7 @@ function M.new()
         rects = {}, spinners = {}, areas = {}, fields = {}, radios = {}, outlines = {}, textYs = {}, fontFiles = {}, missingFonts = {}, nextFontId = 4,
         netStatus = 1, clockSynced = true, epoch = 1792000000, ms = 0,
         handles = {}, menuAdds = 0, paused = false, inputCleared = 0, textColors = {}, buttons = {}, panels = {},
+        slowMode = false, slowWrites = 0,
     }
     local fs, files = fakes.fs()
     F.files = files
@@ -50,6 +51,7 @@ function M.new()
     end
     function fs.write(h, s)
         if fs.failWrite then return -1 end
+        if F.slowMode then F.slowWrites = F.slowWrites + 1 end
         s = tostring(s)
         if h.pos > #h.buf then h.buf = h.buf .. GAP:rep(h.pos - #h.buf) end
         h.buf = h.buf:sub(1, h.pos) .. s .. h.buf:sub(h.pos + #s + 1)
@@ -108,6 +110,10 @@ function M.new()
         table.sort(out, function(a, b) return a.name < b.name end)
         return out
     end
+    function fs.ensureReady() return true end
+    -- The SD bus speed (F.slowMode, as lua_toboolean reads it); F.slowWrites
+    -- counts the writes made in slow mode.
+    function fs.setSlowMode(on) F.slowMode = not not on end
     F.responder = function() return 404, {}, "no responder" end
     -- Handles opened and not closed yet; connections not closed or released.
     function F.openHandles()
@@ -141,6 +147,7 @@ function M.new()
                     c.status, c.headers = status, headers or {}
                     c.queue = type(body) == "table" and { table.unpack(body) } or { body or "" }
                     F.streaming[#F.streaming + 1] = c
+                    if c.cb.headers then c.cb.headers() end
                     if c.cb.req then c.cb.req() end -- headers arrived
                 end
             end
@@ -325,7 +332,7 @@ function M.new()
     function network.http.new(host, port, tls)
         if F.poolFull then return nil, "HTTP connection pool full or out of memory" end
         F.conns = F.conns + 1
-        -- c.cb holds the callbacks (req, done, closed); setting nil clears one.
+        -- c.cb holds the callbacks (headers, req, done, closed); setting nil clears one.
         local c = { host = host, port = port, tls = tls, cb = {}, released = false, queue = {}, buf = "", pos = 1 }
         F.made[#F.made + 1] = c
         local function open()
@@ -336,6 +343,7 @@ function M.new()
         function c:setReadTimeout(s) open(); self.readTimeout = s end
         function c:setReadBufferSize(n) open(); self.bufferSize = n; return true end
         function c:setRequestCallback(fn) open(); self.cb.req = fn end
+        function c:setHeadersReadCallback(fn) open(); self.cb.headers = fn end
         function c:setRequestCompleteCallback(fn) open(); self.cb.done = fn end
         function c:setConnectionClosedCallback(fn) open(); self.cb.closed = fn end
         function c:post(path, headers, body)

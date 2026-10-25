@@ -45,7 +45,7 @@ local function recorder(F)
     for _, path in ipairs({ "display.clearClipRect", "display.setScrollArea", "display.setScrollOffset",
         "input.setRepeat", "graphics.setTransparentColor", "graphics.image.cancelPreload",
         "graphics.sprite.removeAll", "audio.stopTone", "audio.setVolume", "audio.stopStream",
-        "perf.setTargetFPS", "sys.resumeBackground" }) do
+        "perf.setTargetFPS", "sys.resumeBackground", "fs.setSlowMode" }) do
         local t, last = pc, nil
         local parts = {}
         for p in path:gmatch("[^.]+") do parts[#parts + 1] = p end
@@ -177,6 +177,20 @@ local function atSandboxInstruction(armed, n, fire)
         if n == nil or seen == n then fire() end
     end, "", 1)
     return function() debug.sethook() end
+end
+
+-- ctx.readLib over PicoDeck's own /system/lib (PICODECK_ROOT), or nil when
+-- it is unset.
+local function picodeckLibs()
+    local root = os.getenv("PICODECK_ROOT")
+    if not root or root == "" then return nil end
+    return function(name)
+        local f = io.open(root .. "/system/lib/" .. name .. ".lua")
+        if not f then return nil end
+        local src = f:read("a")
+        f:close()
+        return src
+    end
 end
 
 local function savedChat(F, id)
@@ -463,12 +477,75 @@ return {
             { "input.setRepeat", 200, 80 }, { "graphics.setTransparentColor", nil, n = 2 },
             { "graphics.image.cancelPreload" }, { "graphics.sprite.removeAll" }, { "audio.stopTone" },
             { "audio.setVolume", 100 }, { "audio.stopStream" }, { "perf.setTargetFPS", 0 },
+            { "fs.setSlowMode", false },
         }) do
             T.ok(called(calls, table.unpack(c, 1, c.n or #c)), "not undone: " .. c[1])
         end
     end,
 
     -- The backstop: the five real library tables are put back as they were.
+    -- Spec 9.3: picodeck's download library works inside a program (skipped
+    -- without PICODECK_ROOT). It writes under fs.setSlowMode(true), as the
+    -- radio's EMI corrupts SD writes at full speed, and it can write only
+    -- inside the program's folder.
+    download_lib_in_a_program = function()
+        local readLib = picodeckLibs()
+        if not readLib then return end
+        T.ok(readLib("download"), "no system/lib/download.lua under PICODECK_ROOT")
+        local F = Fake.new()
+        local KEYS = D .. "/keys.txt"
+        F.files[KEYS] = "claude=sk-ant-secret\n"
+        F.responder = function(_, path)
+            if path == "/file.bin" then return 200, { ["content-length"] = "11" }, { "hello ", "world" } end
+            return 200, { ["content-length"] = "4" }, { "evil" }
+        end
+        local r = exec([[
+            local download = picocalc.sys.loadlib("download")
+            local seen
+            assert(download.toFile("http://example.com/file.bin", "file.bin", {
+                onProgress = function(got, total) seen = got .. "/" .. total end }))
+            print(seen)
+            local ok, err = download.toFile("http://example.com/keys", "/data/net.picodeck.llmchat/keys.txt")
+            print(ok, err)
+        ]], F, { readLib = readLib })
+        T.eq(r.status, "ended", r.err)
+        T.eq(F.files[DATA .. "/file.bin"], "hello world")
+        T.eq(r.printed[1], "11/11")
+        T.ok(r.printed[2]:find("^false cannot open "), r.printed[2])
+        T.eq(F.files[KEYS], "claude=sk-ant-secret\n", "keys.txt was written")
+        T.ok(F.slowWrites > 0, "the file was not written in slow mode")
+        T.eq(F.slowMode, false, "the SD bus is left in slow mode")
+    end,
+
+    -- A download that the program never finishes (Stop program, here) leaves
+    -- slow mode on, as the library's own reset never runs: cleanup sets the
+    -- firmware's default again.
+    stopped_download_resets_slow_mode = function()
+        local readLib = picodeckLibs()
+        if not readLib then return end
+        local F = Fake.new()
+        local chunks = {}
+        for i = 1, 200 do chunks[i] = "x" end
+        F.responder = function() return 200, {}, chunks end
+        local sleep = F.pc.sys.sleep
+        local slowAtStop
+        F.pc.sys.sleep = function(ms)
+            sleep(ms)
+            local stop = F.menu["Stop program"]
+            if F.ms >= 100 and stop then
+                slowAtStop = F.slowMode
+                stop()
+            end
+        end
+        local r = exec([[
+            picocalc.sys.loadlib("download").toFile("http://example.com/big.bin", "big.bin")
+        ]], F, { readLib = readLib })
+        T.eq(r.status, "stopped", r.err)
+        T.eq(slowAtStop, true, "stopped mid-transfer")
+        T.eq(F.slowMode, false, "the SD bus is left in slow mode")
+        T.eq(F.openHandles(), 0, "the partial file is still open")
+    end,
+
     libraries_restored = function()
         local F = Fake.new()
         local rep, sin = string.rep, math.sin
