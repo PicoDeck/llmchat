@@ -163,6 +163,22 @@ local function lastNote(chat)
     return it and it.role == "note" and it.text or nil
 end
 
+-- Runs fire() at the n-th instruction of src/sandbox.lua executed once
+-- armed() is true (every one when n is nil): the firmware's service hook,
+-- which runs a chosen menu item, or a network or sound callback, between any
+-- two instructions. Returns a function that removes the hook.
+local function atSandboxInstruction(armed, n, fire)
+    local seen = 0
+    debug.sethook(function()
+        if not armed() then return end
+        local info = debug.getinfo(2, "S")
+        if not (info and info.source:find("sandbox.lua", 1, true)) then return end
+        seen = seen + 1
+        if n == nil or seen == n then fire() end
+    end, "", 1)
+    return function() debug.sethook() end
+end
+
 local function savedChat(F, id)
     local raw = F.files[D .. "/chats/" .. id .. ".json"]
     return raw and F.pc.json.decode(raw)
@@ -307,6 +323,118 @@ return {
         player.finish()
         player.loop()
         T.ok(not F.hasLog("LATE"), "the player's callbacks are no longer the program's")
+    end,
+
+    -- Review fix (ruling R24): the firmware runs a menu item's callback
+    -- unprotected. A program item chosen just after the program returns (at
+    -- each instruction in turn, until the menu is clear) never escapes
+    -- runProgram, even raising an object whose __tostring raises.
+    menu_item_after_the_run_contained = function()
+        local code = "-- evil.lua\n"
+            .. "local bad = setmetatable({}, { __tostring = function() error('tostring bomb', 0) end })\n"
+            .. "picocalc.sys.addMenuItem('Mine', function() error(bad) end)\n"
+            .. "picocalc.sys.log('END')\n"
+        local F, app = setup({ programs = { ["evil.lua"] = code } })
+        openC1(F, app)
+        local armed = false
+        local log = F.pc.sys.log
+        F.pc.sys.log = function(m)
+            if m == "END" then armed = true end
+            log(m)
+        end
+        local firedAfterEnd, notFired = 0, 0
+        for n = 1, 80 do
+            armed = false
+            local fired = false
+            local unhook = atSandboxInstruction(function() return armed end, n, function()
+                local item = F.menu["Mine"]
+                if item then
+                    fired = true
+                    item()
+                end
+            end)
+            local ok, result = pcall(app.runProgram, app, "evil.lua")
+            unhook()
+            T.ok(ok, "escaped at instruction " .. n .. ": " .. Sandbox.safeText(result))
+            T.eq(app.running, true)
+            T.eq(next(F.menu), nil, "the menu is clear after the run")
+            T.ok(result.status == "ended" or result.status == "error", result.status)
+            if result.status == "error" then
+                T.eq(result.err, "(error object is a table value)")
+                T.eq(app.screenName, "programError")
+            end
+            if fired and result.status == "ended" then firedAfterEnd = firedAfterEnd + 1 end
+            if not fired then notFired = notFired + 1 end
+            app:go("chat")
+        end
+        T.ok(firedAfterEnd > 0, "the item fired after the program's outcome was recorded")
+        T.ok(notFired > 0, "later on, the item was already gone")
+        T.ok(not F.hasLog("tostring bomb"))
+    end,
+
+    -- Review fix (ruling R24): HTTP, TCP and sound callbacks the firmware
+    -- would fire after the run are cut off before cleanup starts.
+    callbacks_shut_before_cleanup = function()
+        local F = Fake.new()
+        local player = {}
+        function player:setFinishCallback(fn) self.finish = fn end
+        function player:setLoopCallback(fn) self.loop = fn end
+        function player:stop() self.stopped = true end
+        F.pc.sound = { sampleplayer = function() return player end }
+        local sock = { cb = {} }
+        function sock:setConnectCallback(fn) self.cb.connect = fn end
+        function sock:setReadCallback(fn) self.cb.read = fn end
+        function sock:setCloseCallback(fn) self.cb.close = fn end
+        function sock:close() self.closed = true; self.cb = {} end -- drops its callbacks
+        F.pc.tcp = { new = function() return sock end }
+        local armed, cleaning, late, lateInCleanup = false, false, 0, 0
+        local log = F.pc.sys.log
+        F.pc.sys.log = function(m)
+            if m == "END" then armed = true end
+            if m == "LATE" then
+                late = late + 1
+                if cleaning then lateInCleanup = lateInCleanup + 1 end
+            end
+            log(m)
+        end
+        local cleanup = Sandbox.cleanup
+        Sandbox.cleanup = function(...)
+            cleaning = true
+            return cleanup(...)
+        end
+        -- every pending callback, called as the firmware does: protected
+        local function fireAll()
+            local c = F.made[#F.made]
+            for _, f in pairs(c and c.cb or {}) do pcall(f) end
+            for _, f in pairs(sock.cb) do pcall(f, sock) end
+            if player.finish then pcall(player.finish) end
+            if player.loop then pcall(player.loop) end
+        end
+        local unhook = atSandboxInstruction(function() return armed end, nil, fireAll)
+        local ok, r = pcall(exec, [[
+            local late = function() picocalc.sys.log("LATE") end
+            local c = picocalc.network.http.new("example.com", 80, false)
+            c:setRequestCallback(late)
+            c:setRequestCompleteCallback(late)
+            c:setConnectionClosedCallback(late)
+            local s = picocalc.tcp.new()
+            s:setConnectCallback(late)
+            s:setReadCallback(late)
+            s:setCloseCallback(late)
+            local p = picocalc.sound.sampleplayer("a.wav")
+            p:setFinishCallback(late)
+            p:setLoopCallback(late)
+            picocalc.sys.log("END")
+        ]], F)
+        unhook()
+        Sandbox.cleanup = cleanup
+        T.ok(ok, r)
+        T.eq(r.status, "ended", r.err)
+        T.ok(late > 0, "the callbacks were live until the run ended")
+        T.eq(lateInCleanup, 0, "no program callback ran once cleanup started")
+        T.eq(cleaning, true)
+        T.eq(sock.closed, true)
+        T.eq(player.stopped, true)
     end,
 
     cleanup_restores_the_font_saved = function()
@@ -656,6 +784,31 @@ return {
         frames(app)
         T.ok(has(F, "runner bug"))
         T.eq(next(F.menu), nil, "cleaned up")
+        -- a program's error object escaping the runner is never tostring'd
+        app:go("chat")
+        local bad = setmetatable({}, { __tostring = function() error("tostring bomb", 0) end })
+        Sandbox.execute = function() error(bad) end
+        ok, err = pcall(press, F, app, "f3")
+        Sandbox.execute = execute
+        T.ok(ok, err)
+        T.eq(app.running, true)
+        T.eq(app.screenName, "programError")
+        frames(app)
+        T.eq(app.screens.programError.result.err, "The runner failed: (error object is a table value)")
+        T.ok(not F.hasLog("tostring bomb"))
+        -- the runner failing after "Stop program" was added: cleanup clears it
+        app:go("chat")
+        local getTime = F.pc.sys.getTimeMs
+        F.pc.sys.getTimeMs = function()
+            if F.menu["Stop program"] then error("clock bug") end
+            return getTime()
+        end
+        ok, err = pcall(app.runProgram, app, "dice.lua")
+        F.pc.sys.getTimeMs = getTime
+        T.ok(ok, err)
+        T.eq(app.screenName, "programError")
+        T.ok(app.screens.programError.result.err:find("clock bug", 1, true))
+        T.eq(next(F.menu), nil, "Stop program was removed")
     end,
 
     lock_strings_at_start = function()

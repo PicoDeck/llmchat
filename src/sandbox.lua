@@ -19,10 +19,13 @@
 --   run.appMenu   {label, fn} items of the app's own (Task 15's "Stop
 --                 program"): a program's sys.clearMenuItems() puts them back
 --   run.exited    true once the program called sys.exit()
+--   run.ok, run.err  the program's outcome, recorded by execute inside the
+--                 protected call
 -- Sandbox.execute(pc, run, src) -> {status, err, secs, printed}
 --                 compiles src as ctx.name in run.env, saves the font in
 --                 run.saved, clears both framebuffers, adds "Stop program",
---                 runs it under xpcall and cleans up. status: "ended",
+--                 runs it under xpcall, shuts the menu and the callbacks
+--                 at once, then cleans up. status: "ended",
 --                 "exit" (sys.exit), "stopped" (Stop program), "error" or
 --                 "compile"; err (the last two) and printed are cleanText'd
 -- Sandbox.cleanup(pc, run)  spec 9.4: drops run.env; releases what
@@ -31,6 +34,7 @@
 --                 tables; collects. Safe to call twice
 -- Sandbox.UNDO    reset name -> the undo cleanup runs (one per RESETS name)
 -- Sandbox.cleanText(s, max)  a program's text as printable ASCII lines
+-- Sandbox.safeText(v)  any program value as text, without running its code
 -- Sandbox.checkPath(dataDir, p) -> abs | nil, "access denied"
 -- Sandbox.STOP    the private sentinel sys.exit() raises
 -- Sandbox.lockStrings()  the app calls it once at start
@@ -80,12 +84,15 @@
 --   - The real sys.exit (sticky, it would close the chat): replaced by
 --     raising STOP.
 --   - Program code running inside the chat after the run: setmetatable
---     refuses __gc; collectgarbage cannot stop or retune the collector;
---     cleanup clears the menu (the program's items), sets an HTTP
---     connection's callbacks to nil before closing it (tcp:close drops its
---     own), and replaces a player's finish and loop callbacks with a no-op
---     before stopping it; the Stop item does nothing once the run is over;
---     the message handler never calls a program's __tostring.
+--     refuses __gc; collectgarbage cannot stop or retune the collector. The
+--     first thing after the program's xpcall returns (shut, ruling R24)
+--     clears the menu, whose callbacks the firmware runs unprotected, then
+--     sets an HTTP connection's callbacks to nil, closes a TCP socket (which
+--     drops its own) and replaces a player's finish and loop callbacks with a
+--     no-op; a menu item that still fires before that raises into a pcall.
+--     The Stop item does nothing once the run is over. No program value is
+--     ever tostring'd or concatenated outside the program's own calls
+--     (safeText), so its __tostring never runs in the chat.
 --   - The app's own requests: App:runProgram refuses to run while a reply is
 --     arriving (9.2), and cancels a pending title request first.
 local AUDIT = require("src.sandbox_api")
@@ -814,6 +821,27 @@ local function restoreLibraries(run)
     end
 end
 
+-- The first thing after the program's xpcall returns, before any other code
+-- (ruling R24). The firmware calls a menu item's callback unprotected
+-- (lua_call), so a program item chosen now would raise into the chat: the
+-- menu is cleared first (nothing of the chat's needs re-adding). Then the
+-- callbacks the firmware calls later (protected, but program code running in
+-- the chat): an HTTP connection's are set to nil; a TCP socket is closed,
+-- which drops them (its nil setter would leave the old reference held); a
+-- player's are replaced with a no-op. cleanup closes and stops the rest.
+local function shut(pc, run)
+    try(pc.sys, "clearMenuItems")
+    local t = run.tracked
+    emptyOut(t.menu)
+    emptyOut(run.appMenu)
+    for _, c in _pairs(t.http) do _pcall(detachHttp, c) end
+    for k, c in _pairs(t.tcp) do
+        t.tcp[k] = nil
+        _pcall(closeObj, c)
+    end
+    for _, p in _pairs(t.sound) do _pcall(quietPlayer, p) end
+end
+
 -- Sandbox.cleanup(pc, run): the Lua-visible version of the firmware's exit
 -- teardown (spec 9.4), safe to call twice. The program's env is dropped
 -- first, so what it held can be collected. Then: the connections and players
@@ -893,16 +921,33 @@ local function cleanText(s, max)
 end
 Sandbox.cleanText = cleanText
 
+-- A program's value as text without running any of its code: tostring (or
+-- ..) on a program's table could run its __tostring, inside the chat. Strings
+-- and numbers give their text, as lua.c does without the metamethod; anything
+-- else names its type.
+local function safeText(v)
+    local ty = _type(v)
+    if ty == "string" then return v end
+    if ty == "number" then return _tostring(v) end
+    return "(error object is a " .. ty .. " value)"
+end
+Sandbox.safeText = safeText
+
 -- The message handler: no traceback (debug is blocked) and no program code.
--- tostring on a program's table could run its __tostring, inside the chat's
--- handler, so only strings and numbers give their text, as lua.c does without
--- the metamethod.
 local function handler(e)
     if _rawequal(e, STOP) then return STOP end
-    local ty = _type(e)
-    if ty == "string" then return e end
-    if ty == "number" then return _tostring(e) end
-    return "(error object is a " .. ty .. " value)"
+    return safeText(e)
+end
+
+-- The program under xpcall, then shut at once (R24). The outcome is recorded
+-- inside the protected call (main sets run.ok; onError sets run.ok and
+-- run.err), so a callback that raises right after xpcall returns can't lose
+-- it. Memory errors skip the handler: theirs comes from xpcall.
+local function runThenShut(pc, run, main, onError)
+    local ok, err = _xpcall(main, onError)
+    shut(pc, run)
+    run.active = false
+    if run.ok == nil then run.ok, run.err = ok, err end
 end
 
 local function seconds(t0, t1)
@@ -931,7 +976,7 @@ function Sandbox.execute(pc, run, src)
     local fn, cerr = _load(src, "=" .. name, "t", run.env)
     if not fn then
         Sandbox.cleanup(pc, run)
-        return { status = "compile", err = cleanText(_tostring(cerr), MAX_ERR), secs = 0, printed = {} }
+        return { status = "compile", err = cleanText(safeText(cerr), MAX_ERR), secs = 0, printed = {} }
     end
     local sys, d = pc.sys, pc.display
     run.saved = { font = d.getFont and d.getFont() or d.FONT_6X8 }
@@ -948,12 +993,31 @@ function Sandbox.execute(pc, run, src)
     end
     run.appMenu[#run.appMenu + 1] = item
     sys.addMenuItem(item.label, item.fn)
+    local function main()
+        fn()
+        run.ok = true
+    end
+    local function onError(e)
+        local v = handler(e)
+        run.ok, run.err = false, v
+        return v
+    end
     local t0 = sys.getTimeMs()
     run.active = true
-    local ok, err = _xpcall(fn, handler)
+    local done, why = _pcall(runThenShut, pc, run, main, onError)
+    main, fn = nil, nil -- with run.env (cleanup), the last references to the program
+    if not done then
+        -- A program's menu item, chosen between the program's end and the
+        -- menu clear, raised into runThenShut: shut again (once the menu is
+        -- clear nothing can fire), and its error is the outcome if none was.
+        for _ = 1, 3 do
+            if _pcall(shut, pc, run) then break end
+        end
+        if run.ok == nil then run.ok, run.err = false, handler(why) end
+    end
     run.active = false
     local t1 = sys.getTimeMs()
-    fn = nil -- with run.env (cleanup), the last references to the program
+    local ok, err = run.ok, run.err
     local status
     if ok then
         status = "ended"
@@ -968,7 +1032,7 @@ function Sandbox.execute(pc, run, src)
     for i, line in _ipairs(run.printed) do printed[i] = cleanText(line, MAX_LINE) end
     return {
         status = status,
-        err = err and cleanText(err, MAX_ERR) or nil,
+        err = err and cleanText(safeText(err), MAX_ERR) or nil,
         secs = seconds(t0, t1),
         printed = printed,
     }

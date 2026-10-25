@@ -139,7 +139,9 @@ function App:runProgram(name, opts)
     if okNew then ok, result = pcall(Sandbox.execute, pc, run, src) else ok, result = false, run end
     if not ok then
         if okNew then pcall(Sandbox.cleanup, pc, run) end
-        result = { status = "error", err = Sandbox.cleanText("The runner failed: " .. tostring(result), 600),
+        -- never tostring a value that may be a program's: its __tostring would run here
+        local why = type(result) == "string" and result or "(error object is a " .. type(result) .. " value)"
+        result = { status = "error", err = Sandbox.cleanText("The runner failed: " .. why, 600),
                    secs = 0, printed = {} }
     end
     run, src = nil, nil
