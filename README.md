@@ -81,7 +81,8 @@ A program runs inside the chat app, so the app fences it in. The fence is built 
 - **Not kept out** (the fence's known limits):
   - A program shares the chat's memory, so a greedy one can use it all (the run then ends with "not enough memory").
   - While it runs, it can draw over the screen, play sound, and use the network, since the app has the `http` permission.
-  - A program written to catch errors can ignore "Stop program": its own `pcall` or `xpcall` catches the stop, and so do `coroutine.resume`, `load` (in a reader function it is given) and the firmware, which runs network, sound and progress callbacks protected. So can a program whose `<close>` handlers each set up another before they loop, as each Stop ends only the handler that is running. **Exit App** in the system menu is the fallback.
+  - A program written to catch errors can ignore "Stop program": its own `pcall` or `xpcall` catches the stop, and so do `coroutine.resume` and `coroutine.close`, and the firmware when it runs a network or sound callback from `sys.sleep`, or a copy or unzip progress callback. A program can also catch it in a reader function it gives `load`, but then it runs on with nothing it can call. So can a program whose `<close>` handlers each set up another before they loop, as each Stop ends only the handler that is running. **Exit App** in the system menu is the fallback.
+  - Not yet checked on a device: the firmware also runs network and sound callbacks from its own background service, where Lua runs no hooks. A program callback there that never returns can't be reached by Stop program or Exit App, as the system menu can't open, and the device probably restarts when its watchdog runs out.
 - Reading a program before you run it is still a good habit.
 
 A stronger wall would need firmware support (running a program as its own app, in its own Lua state); that is not built.

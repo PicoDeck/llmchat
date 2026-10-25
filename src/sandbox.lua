@@ -126,23 +126,40 @@
 --         grids, terminals, cameras, meshes, crypto contexts) are not gated.
 --         None of them can arm a callback (the firmware keeps Lua callbacks
 --         only for menu items, sound players, HTTP and TCP: every luaL_ref in
---         lua_bridge_*.c), and only program code can call them. The only
---         program code that runs after the gate is the program's <close>
---         handlers: Lua runs them as its stack unwinds, after onError has
---         closed the gate and before xpcall returns. They can use those
---         methods (draw on the program's screen, before the chat redraws it)
---         and nothing else, and Stop program raises until xpcall returns
---         (run.unwound), ending the one running. A memory error skips
---         onError, so they then run before the gate closes, as part of the
---         run. The few instructions between the program's last one and the
---         gate are still the run: a callback the firmware fires there has the
---         program's capabilities, as during the run (spec 9.7).
---       - A program can still ignore the stop (spec 9.7; Exit App is the
---         fallback). One that catches it (its own pcall or xpcall, a
---         coroutine, a reader function it gives load) keeps running, and
---         keeps its capabilities, until it ends. One whose <close> handlers
---         each declare another <close> variable before they loop gets a new
---         handler for every Stop, which ends only the one running.
+--         lua_bridge_*.c), and only program code can call them. Program
+--         code runs after the gate in two ways, and can use those methods
+--         (draw on the program's screen, before the chat redraws it) and
+--         nothing else:
+--           - its <close> handlers: Lua runs them as its stack unwinds, after
+--             onError has closed the gate and before xpcall returns. Stop
+--             program raises until xpcall returns (run.unwound), ending the
+--             one running. A memory error that skips onError, or the rest of
+--             it, leaves the gate open: they then run as part of the run,
+--             where Stop works as during it;
+--           - the rest of the program, after an error in a reader function
+--             it gave load: Lua runs onError for it (the protected parser
+--             passes on the message handler), so the outcome is recorded and
+--             the gate closes mid-run, and the program goes on with no
+--             capabilities (it fails closed). Stop still raises, and ends it
+--             unless it is caught again.
+--         The few instructions between the program's last one and the
+--         outcome, and the one between the outcome and the gate, are still
+--         the run: a callback the firmware fires there has the program's
+--         capabilities, as during the run (spec 9.7).
+--       - A program can still ignore the stop (spec 9.7). One that catches it
+--         with its own pcall or xpcall, with coroutine.resume or
+--         coroutine.close, or in a callback the firmware runs protected from
+--         sys.sleep or a copy or unzip progress loop keeps running, and keeps
+--         its capabilities, until it ends. One that catches it in a reader
+--         function it gives load keeps running with the gate closed (above).
+--         One whose <close> handlers each declare another <close> variable
+--         before they loop gets a new handler for every Stop, which ends only
+--         the one running. Exit App is the fallback for all of these. Not
+--         yet checked on the device: an HTTP, TCP or sound callback the
+--         firmware fires from its hook (lua_service_full) runs with Lua hooks
+--         off, so one that never returns gets no service pass: neither Stop
+--         nor Exit App can reach it, and the watchdog probably resets the
+--         device (docs/follow-ups.md).
 --   - The app's own requests: App:runProgram refuses to run while a reply is
 --     arriving (9.2), and cancels a pending title request first.
 local AUDIT = require("src.sandbox_api")

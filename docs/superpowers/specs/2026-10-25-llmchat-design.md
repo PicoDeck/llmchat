@@ -497,7 +497,7 @@ Keep that table in `src/sandbox.lua`'s header comment. A host test checks the pr
 - Before each run, the chat adds a menu item, **"Stop program"**, with `sys.addMenuItem`.
 - Its callback raises the stop sentinel. The firmware runs item callbacks after the menu closes, "and they may leave by longjmp (`sys.exit()`, a Lua error)" (`src/os/CLAUDE.md`, "App item callbacks run last"). The error should therefore unwind the running program up to the runner's `xpcall`.
 - **Verify this first** on the simulator and the device, with `while true do end` and with a loop that calls only `sys.sleep` (section 12).
-- **Limits:** a program that catches errors with its own `pcall` can swallow the stop. The system menu's "Exit App" remains as a last resort. It closes the chat app, which loses nothing, since the chat is already saved.
+- **Limits:** a program can still swallow the stop; 9.7 lists the ways (its own `pcall` is the simplest). The system menu's "Exit App" remains as a last resort, except in the one case 9.7 names (a callback the firmware's hook fires that never returns). It closes the chat app, which loses nothing, since the chat is already saved.
 
 ### 9.6 Fixing a crash
 "Ask <provider> to fix" appends a user message and sends it. The code is already in the conversation, so it isn't resent, and history stays append-only (6.2):
@@ -516,8 +516,9 @@ Please send a fixed version of the whole program.
 This is a fence, not a wall:
 - A program shares the chat's Lua heap.
 - It can still draw over the screen, play sound, or use the network with the chat's `http` permission.
-- A program written to catch errors can ignore "Stop program": its own `pcall` or `xpcall`, `coroutine.resume`, a `load` reader, and the firmware's protected calls of network, sound and progress callbacks all catch the stop.
+- A program written to catch errors can ignore "Stop program": its own `pcall` or `xpcall`, `coroutine.resume` and `coroutine.close`, and the firmware's protected calls of the callbacks it runs from `sys.sleep` or a copy or unzip progress loop all catch the stop. So does a `load` reader, but it fails closed: Lua runs the runner's message handler for the reader's error, so the gate closes and the program runs on with no capabilities.
 - So can a program whose `<close>` handlers each declare another `<close>` variable before they loop. Lua runs every pending handler as the stack unwinds, catching each one's error, so each Stop ends only the handler that is running (Stop raises until the run's `xpcall` returns, so one looping handler ends after one Stop).
+- Exit App is the fallback for all of these, but not for this one, not yet checked on the device: the firmware's service pass, run from the Lua hook, also fires HTTP, TCP and sound callbacks (`lua_service_full`), and Lua runs no hook inside a hook. A program callback fired there that never returns gets no service pass, so the system menu can't open: neither Stop program nor Exit App can reach it, and the watchdog probably resets the device. `docs/follow-ups.md` has it as an investigation.
 
 The real wall would be a firmware feature: run a program as its own app in its own VM, then return to the chat. The OS would do the full teardown. That fits the later "turn a program into an app" step, so it is out of scope here.
 
