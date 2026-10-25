@@ -3,6 +3,8 @@ local Fake = require("tests.fakepc")
 local Fixture = require("tests.fixture")
 local Store = require("src.store")
 local Keys = require("src.keys")
+local Layout = require("src.layout")
+local Markdown = require("src.markdown")
 
 local ID = "net.picodeck.llmchat"
 local D = "/data/" .. ID
@@ -30,6 +32,7 @@ local function setup(opts)
         if body:find("@thinking", 1, true) then return 200, {}, chunked("claude-thinking.sse") end
         return 200, {}, chunked("claude-text.sse", 60)
     end
+    if opts.pre then opts.pre(F) end
     local App = require("src.app")
     local app = App.new(F.pc, ID, "/apps/llmchat")
     app:frame()
@@ -279,5 +282,65 @@ return {
         T.eq(#F.requests, 0)
         T.ok(has(F, "Add your Claude key in Settings"), "note drawn")
         T.eq(app.screens.chat.ta:getText(), "hi", "draft kept")
+    end,
+    imports_old_key_at_startup = function()
+        local F, app = setup({
+            key = false,
+            pre = function(F)
+                F.config.llmchat_provider = "2"
+                F.config.llmchat_api_key = "sk-ant-old"
+            end,
+        })
+        T.eq(app.store:keys().claude, "sk-ant-old")
+        T.eq(F.config.llmchat_api_key, nil)
+        T.eq(F.config.llmchat_provider, nil)
+        -- the key is usable at once
+        sendText(F, app, "hi")
+        T.eq(#F.requests, 1)
+    end,
+
+    view_top_follows_header_height = function()
+        local clipY
+        local F, app = setup({
+            seed = tallChat,
+            pre = function(F)
+                F.pc.ui.drawHeader = function() return nil end -- firmware before 0.4.0
+                local set = F.pc.display.setClipRect
+                F.pc.display.setClipRect = function(x, y, w, h) clipY = y; set(x, y, w, h) end
+            end,
+        })
+        app:go("chat", { open = "tall1" })
+        frames(app, 2)
+        T.eq(clipY, 30, "content starts below the 29-row header")
+        T.eq(app.screens.chat.viewH, 268 - 30)
+        T.ok(app.screens.chat.follow)
+    end,
+
+    live_layout_is_incremental = function()
+        local F, app, s = setup()
+        local text = "**The essentials**\n\n1. First item here.\n\n2. Second item here.\n\n"
+            .. "- Waterproof jacket and overtrousers: October in the Lakes is wet.\n- Warm layers.\n\n"
+            .. "> a quote\n\n```lua\n-- dice.lua\nlocal d = 1\n\nlocal e = 2\n```\n\nUse `math.random` for the roll.\n\n"
+        for i = 1, 25 do text = text .. "Paragraph " .. i .. " has some words in it to wrap around the line.\n\n" end
+        local chat = app.chat
+        chat.state, chat.live = "streaming", { text = "" }
+        local counting, parsed, bumps = false, 0, 0
+        local parse = Markdown.parse
+        Markdown.parse = function(t) if counting then parsed = parsed + #t end return parse(t) end
+        for n = 10, #text, 10 do
+            chat.live.text = text:sub(1, n)
+            chat:_bump()
+            counting = true
+            app:frame()
+            counting = false
+            bumps = bumps + 1
+            local e = s.entries[#s.entries]
+            local want, wantH = Layout.assistant(parse(text:sub(1, n)), app.fonts, 296, nil)
+            if #want > 0 then T.same(e.rows, want, "rows after " .. n .. " bytes") end
+        end
+        Markdown.parse = parse
+        T.ok(bumps > 100, "enough bumps")
+        -- the whole text each time would be about bumps * #text / 2 characters
+        T.ok(parsed < 4 * #text, "parsed " .. parsed .. " characters for a " .. #text .. " byte reply")
     end,
 }

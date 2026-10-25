@@ -11,6 +11,7 @@ S.__index = S
 
 local ROW = 14 -- one Up/Down step
 local GAP = 6 -- between messages
+local BLOCK_GAP = 4 -- between blocks of one message (src/layout.lua GAP)
 local PAD = 4 -- above the first and below the last message
 local TEXT_W = 296
 local USER_MAXW = 240
@@ -137,6 +138,57 @@ function S:entryFor(it, spec)
     return e
 end
 
+-- Appends the laid-out rows of `chunk` (whole paragraphs) to the live cache.
+local function commit(st, chunk, spec, programs)
+    local rows, h = Layout.assistant(Markdown.parse(chunk), spec, TEXT_W, programs)
+    if #rows == 0 then return end
+    local off = #st.rows > 0 and st.h + BLOCK_GAP or 0
+    for _, r in ipairs(rows) do
+        r.y = r.y + off
+        st.rows[#st.rows + 1] = r
+    end
+    st.h = off + h
+end
+
+-- Rows of the live reply (spec 7.4). The text up to its last blank line
+-- outside an open code fence is parsed and laid out once and kept; only the
+-- tail after it is laid out again on each bump.
+function S:liveRows(text, spec)
+    local live, programs = self.chat.live, self.chat.programs
+    local st = self.liveState
+    if not st or st.live ~= live or st.spec ~= spec or st.programs ~= programs then
+        st = { live = live, spec = spec, programs = programs, rows = {}, h = 0, split = 1, scanned = 1, fence = false }
+        self.liveState = st
+    end
+    while true do
+        local nl = text:find("\n", st.scanned, true)
+        if not nl then break end
+        local line = text:sub(st.scanned, nl - 1)
+        if line:match("^%s*```") then
+            st.fence = not st.fence
+        elseif not st.fence and not line:find("%S") then
+            commit(st, text:sub(st.split, nl - 1), spec, programs)
+            st.split = nl + 1
+        end
+        st.scanned = nl + 1
+    end
+    local rows, h = {}, st.h
+    for i, r in ipairs(st.rows) do rows[i] = r end
+    local tail = text:sub(st.split)
+    if tail:find("%S") then
+        local trows, th = Layout.assistant(Markdown.parse(tail), spec, TEXT_W, programs)
+        if #trows > 0 then
+            local off = #rows > 0 and st.h + BLOCK_GAP or 0
+            for _, r in ipairs(trows) do
+                r.y = r.y + off
+                rows[#rows + 1] = r
+            end
+            h = off + th
+        end
+    end
+    return rows, h
+end
+
 function S:liveEntry(spec)
     local chat = self.chat
     local text = chat.live.text
@@ -146,7 +198,7 @@ function S:liveEntry(spec)
             segs = { { x = TEXT_X, text = "Thinking...", face = "regular", color = "dim" } } } }
         e.h = spec.rowH
     else
-        e.rows, e.h = Layout.assistant(Markdown.parse(text), spec, TEXT_W, chat.programs)
+        e.rows, e.h = self:liveRows(text, spec)
     end
     local last = e.rows[#e.rows]
     local sx, sy = TEXT_X + 4, e.h
@@ -270,13 +322,16 @@ function S:tick(now)
 end
 
 function S:logEnd()
-    local chat = self.chat
-    local last = chat.items[#chat.items]
+    local items = self.chat.items
+    local last, prev = items[#items], items[#items - 1]
     local log = self.pc.sys.log
     if last and last.role == "assistant" then
         log(string.format("[chat] %s %d chars", last.stopped and "stopped" or "done", #(last.text or "")))
+    elseif last and last.role == "note" and not last.error then
+        local n = (prev and prev.role == "assistant" and prev.stopped) and #(prev.text or "") or 0
+        log(string.format("[chat] stopped %d chars", n))
     elseif last and last.role == "note" then
-        log(string.format("[chat] %s", last.error and "failed" or "stopped"))
+        log("[chat] failed")
     end
 end
 

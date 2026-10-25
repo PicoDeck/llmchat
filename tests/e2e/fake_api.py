@@ -70,14 +70,17 @@ class FakeAPI:
                 self.send_header("Content-Type", ctype)
                 self.send_header("Connection", "close")
                 self.end_headers()
-                if ctype == "text/event-stream":
-                    for i in range(0, len(body), CHUNK):
-                        self.wfile.write(body[i:i + CHUNK])
-                        self.wfile.flush()
-                        if api.delay:
-                            time.sleep(api.delay)
-                else:
-                    self.wfile.write(body)
+                try:
+                    if ctype == "text/event-stream":
+                        for i in range(0, len(body), CHUNK):
+                            self.wfile.write(body[i:i + CHUNK])
+                            self.wfile.flush()
+                            if api.delay:
+                                time.sleep(api.delay)
+                    else:
+                        self.wfile.write(body)
+                except (ConnectionResetError, BrokenPipeError):
+                    pass  # the app stopped or cancelled the request
 
             def do_POST(self):
                 raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))

@@ -29,6 +29,8 @@ function App.new(pc, appId, appDir)
     self.W = require("src.widgets")
     self.theme = Theme.new(pc.display)
     self.store = Store.new(pc.fs, pc.json, "/data/" .. appId)
+    -- spec 8.4: the old app's key, imported once before any key is read
+    if pc.config then self.store:importOld(pc.config) end
     local prefs = self.store:prefs()
     local spec, err = Fonts.load(pc.display, appDir, Fonts.normalize(prefs.font))
     if err then pc.sys.log("[app] font: " .. err) end

@@ -111,3 +111,61 @@ def test_markdown_reply_and_scroll(llmchat):
     shot(sim, "long-up.png")
     assert sim.is_alive()
     no_lua_errors(sim)
+
+
+def shift_press(sim, key):
+    """A key with Shift held: the simulator holds the shift button (press),
+    clicks the key, then releases shift."""
+    sim.call("inject_button", {"button": "shift", "action": "press"})
+    time.sleep(0.15)
+    sim.keypress(key)
+    time.sleep(0.2)
+    sim.call("inject_button", {"button": "shift", "action": "release"})
+    time.sleep(0.2)
+
+
+def test_shift_enter_makes_a_newline(llmchat):
+    sim, api, data = llmchat()
+    wait(sim, r"\[app\] screen chat", start_app(sim))
+    time.sleep(0.5)
+    type_text(sim, "ab")
+    shift_press(sim, "enter")
+    type_text(sim, "cd")
+    time.sleep(0.5)
+    assert not api.requests, "Shift+Enter must not send"
+    # two lines in the compose box: text lit on the box's first and second row.
+    # A screenshot can catch a frame still being presented, so look again.
+    from PIL import Image
+
+    def lit(im, y0, y1):
+        return any(sum(im.getpixel((x, y))) > 300 for x in range(8, 40) for y in range(y0, y1))
+
+    ok = False
+    for _ in range(10):
+        im = Image.open(shot(sim, "shift-enter.png")).convert("RGB")
+        if lit(im, 273, 281) and lit(im, 282, 291):
+            ok = True
+            break
+        time.sleep(0.3)
+    assert ok, "two lines in the compose box"
+    no_lua_errors(sim)
+
+
+def test_esc_stops_a_streaming_reply(llmchat):
+    sim, api, data = llmchat()
+    api.delay = 0.5
+    wait(sim, r"\[app\] screen chat", start_app(sim))
+    time.sleep(0.5)
+    m = mark(sim)
+    type_text(sim, "hi")
+    sim.keypress("\n")
+    time.sleep(3.5)  # some text has arrived; the whole stream takes about 6 s
+    sim.keypress("esc")
+    line = wait(sim, r"\[chat\] stopped \d+ chars", m)
+    assert not line.endswith(" 0 chars"), "the partial reply was kept"
+    time.sleep(0.4)
+    shot(sim, "stopped.png")
+    assert sim.is_alive(), "the first Esc only stops the reply"
+    chats = list((data / "chats").glob("*.json"))
+    assert any("Reply stopped" in p.read_text() for p in chats if p.name != "index.json")
+    no_lua_errors(sim)
