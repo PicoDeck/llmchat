@@ -72,13 +72,13 @@ function P.request(json, items, opts)
     return "/v1/messages", h, json.encode(body)
 end
 
--- json is the codec (default picocalc.json); handlers: text(s), thinking(), error(msg), done{stop, raw, usage}.
+-- json is the codec (required); handlers: text(s), thinking(), error(msg), done{stop, raw, usage}.
 -- Returns feed(eventName, dataString). Unknown events and block types are
 -- ignored (blocks are still kept for echoing).
-function P.parser(handlers, json)
+function P.parser(json, handlers)
     local blocks, top = {}, 0
     local usage, stop = {}, nil
-    json = json or require("picocalc.json")
+    if type(json) ~= "table" then error("claude.parser: json codec required", 2) end
     local finished = false
 
     local function merge(u)

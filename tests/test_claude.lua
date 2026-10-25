@@ -7,12 +7,12 @@ local Titles = require("src.titles")
 -- Run a fixture through the parser; returns a record of handler calls.
 local function run(name, chunk)
     local rec = { text = {}, thinking = 0, errors = {}, order = {} }
-    local feed = P.parser({
+    local feed = P.parser(J, {
         text = function(s) rec.text[#rec.text + 1] = s; rec.order[#rec.order + 1] = "text" end,
         thinking = function() rec.thinking = rec.thinking + 1; rec.order[#rec.order + 1] = "thinking" end,
         error = function(m) rec.errors[#rec.errors + 1] = m end,
         done = function(info) rec.done = info end,
-    }, J)
+    })
     for _, ev in ipairs(Fixture.events(name)) do feed(ev.name, ev.data) end
     rec.full = table.concat(rec.text)
     return rec
@@ -96,8 +96,8 @@ return {
     end,
     echo_rule_drops_thinking = function()
         local feed, done = nil, nil
-        feed = P.parser({ text = function() end, thinking = function() end, error = function() end,
-            done = function(i) done = i end }, J)
+        feed = P.parser(J, { text = function() end, thinking = function() end, error = function() end,
+            done = function(i) done = i end })
         local function ev(t) feed(t.type, J.encode(t)) end
         ev({ type = "content_block_start", index = 0, content_block = { type = "thinking", thinking = "", signature = "" } })
         ev({ type = "content_block_delta", index = 0, delta = { type = "signature_delta", signature = "S" } })
@@ -108,6 +108,9 @@ return {
         T.eq(#done.raw, 2)
         T.eq(done.raw[1].type, "fallback")
         T.eq(done.raw[2].signature, "T")
+    end,
+    parser_requires_json = function()
+        T.raises(function() P.parser(nil, { text = function() end }) end, "claude.parser: json codec required")
     end,
     refusal_stop = function()
         T.eq(run("claude-refusal.hand.sse").done.stop, "refusal")
