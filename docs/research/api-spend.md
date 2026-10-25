@@ -13,3 +13,5 @@ Written by tools/record_stream.py, a row per request. An error reply is not bill
 | gateway probe: vercel | 200 | deepseek/deepseek-v4.1-flash-1017 | 44 | 47 | $0.0000 (BYOK: upstream $0.00003) |
 | gateway probe: opencode | 200 | deepseek-v4.1-flash | 44 | 51 | $0.0001 |
 | gateway probe: bad key x3 | 401 | - | 0 | 0 | $0.0000 |
+| gateway probe: vercel | 200 | minimax/minimax-m3.1-flash | 208 | 46 | $0.0000 |
+| gateway probe: vercel | 200 | google/gemini-3.8-flash | 14 | 28 | $0.0001 |
