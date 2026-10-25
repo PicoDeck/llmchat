@@ -4,6 +4,7 @@
 local Http = require("src.http")
 local SSE = require("src.sse")
 local Titles = require("src.titles")
+local Programs = require("src.programs")
 
 local Chat = {}
 Chat.__index = Chat
@@ -104,6 +105,11 @@ function Chat:_save()
     local ok, removed = store:saveChat(out)
     if not ok then return nil, removed end
     for _, rid in ipairs(removed or {}) do self.removed[#self.removed + 1] = rid end
+    local progs = self.deps.programs
+    if progs then -- ruling R4: programs of chats the cap dropped lose their owner
+        for _, rid in ipairs(self.removed) do progs:orphan(rid) end
+        self.removed = {}
+    end
     return true
 end
 
@@ -257,13 +263,36 @@ function Chat:stop()
     self.state, self.live = "idle", nil
     self.req, self.sse, self.parserFeed, self.retryAt = nil, nil, nil, nil
     if live and live.text ~= "" then
-        self.items[#self.items + 1] = {
+        local item = {
             role = "assistant", provider = self.providerId, model = self.model,
             text = live.text, stopped = true,
         }
+        self.items[#self.items + 1] = item
+        self:_savePrograms(item, true)
     end
     self:_push("info", "Reply stopped")
     self:_persist()
+end
+
+-- Saves the programs in a reply (spec 9.1). A stopped reply keeps only blocks
+-- whose fence closed. Sets item.programs, self.programs, self.lastProgramName.
+function Chat:_savePrograms(item, closedOnly)
+    local progs = self.deps.programs
+    if not progs or item.text == "" then return end
+    local list = Programs.extract(item.text, closedOnly)
+    if #list == 0 then return end
+    local clock = self:_clock()
+    if not self.id then self.id = self.deps.store:newId(clock) end
+    local names = progs:save(self.id, list, clock.synced and clock.epoch or nil)
+    if #names == 0 then return end
+    item.programs = names
+    self.lastProgramName = names[#names]
+    local all, have = {}, {}
+    for _, n in ipairs(self.programs or {}) do all[#all + 1] = n; have[n] = true end
+    for _, n in ipairs(names) do
+        if not have[n] then all[#all + 1] = n; have[n] = true end
+    end
+    self.programs = all
 end
 
 -- A finished reply: store it, stop notes, long-chat note, hook, save, title.
@@ -290,9 +319,7 @@ function Chat:_complete(info)
             self:_push("info", LONG_NOTE)
         end
     end
-    -- TASK 13 HOOK: when self.deps.programs is set, save the programs in
-    -- `item.text` here (before the save below, so any program notes persist),
-    -- set self.lastProgramName and self.programs (omit when empty).
+    self:_savePrograms(item, false)
     local saved = self:_persist()
     self:_bump()
     if saved and item.text ~= "" and self.titlePending then self:_startTitle() end

@@ -85,6 +85,7 @@ function S:deleteChat(row)
         app.pc.ui.toast("Could not delete the chat")
         return
     end
+    if app.programs then app.programs:orphan(row.id) end
     if app.chat.id == row.id then app.chat:open(nil) end
     self:load()
 end

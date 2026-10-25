@@ -10,6 +10,7 @@
 --   s:draw()         clear and draw the whole screen (flush is the app's)
 local Store = require("src.store")
 local Chat = require("src.chat")
+local Programs = require("src.programs")
 local Prompt = require("src.prompt")
 local Fonts = require("src.fonts")
 local Theme = require("src.theme")
@@ -35,8 +36,9 @@ function App.new(pc, appId, appDir)
     local spec, err = Fonts.load(pc.display, appDir, Fonts.normalize(prefs.font))
     if err then pc.sys.log("[app] font: " .. err) end
     self.fonts = spec
+    self.programs = Programs.new(self.store)
     self.chat = Chat.new({
-        pc = pc, store = self.store,
+        pc = pc, store = self.store, programs = self.programs,
         providers = { claude = require("src.providers.claude"), openai = require("src.providers.openai") },
         prompt = function()
             local function read(name)
