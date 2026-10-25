@@ -657,6 +657,21 @@ return {
         T.eq(lastNote(app.chat), nil, "an error adds no note")
     end,
 
+    -- Final review M8: when drawHeader returns nothing, the panel sits under
+    -- the 29 px header every other screen assumes (it used to take 21).
+    error_screen_header_fallback = function()
+        local F, app = setup({ programs = { ["boom.lua"] = BOOM } })
+        openC1(F, app)
+        press(F, app, "f3")
+        T.eq(app.screenName, "programError")
+        local real = F.pc.ui.drawHeader
+        F.pc.ui.drawHeader = function(t) real(t) end
+        app.dirty = true
+        frames(app)
+        F.pc.ui.drawHeader = real
+        T.eq(F.panels[1].y, 29 + 11)
+    end,
+
     back_to_chat_button = function()
         local F, app = setup({ programs = { ["boom.lua"] = BOOM } })
         openC1(F, app)

@@ -154,7 +154,7 @@ function S:draw()
     local pc, d, th = self.pc, self.pc.display, self.theme
     d.clear(th.bg)
     d.setFont(d.FONT_6X8)
-    local top = pc.ui.drawHeader(self.name) or 21
+    local top = pc.ui.drawHeader(self.name) or 29 -- the header height every screen assumes
     local rows, py, ph = self:layout(top + 11)
     d.setFont(d.FONT_6X8)
     pc.ui.drawPanel(PX, py, PW, ph, "Program stopped")
