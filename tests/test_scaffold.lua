@@ -16,6 +16,10 @@ return {
         T.eq(a.category, "network")
         T.same(a.requirements, { "http" })
         T.eq(a.homepage, "https://github.com/PicoDeck/llmchat")
+        -- Final review I2: "Stop program" raises out of a menu-item callback,
+        -- which is safe to leave by longjmp only from picodeck v0.5.0 (commit
+        -- 3eab61f; before it, leaving the callback leaked the menu's backdrop).
+        T.eq(a.min_firmware, "0.5.0")
     end,
     json_roundtrip = function()
         local v = { a = 1, b = { 1, 2 }, c = J.null }
