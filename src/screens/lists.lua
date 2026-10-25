@@ -145,7 +145,7 @@ function S:chatLines(r)
 end
 
 function S:programLines(r)
-    local line = (r.chat and ("from " .. ascii(r.chat) .. "  ") or "") .. size(r.size)
+    local line = ("from " .. (r.chat and ascii(r.chat) or "a deleted chat") .. "  ") .. size(r.size)
     return ascii(r.name), line, r.updated, nil
 end
 

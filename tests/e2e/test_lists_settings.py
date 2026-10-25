@@ -1,4 +1,5 @@
 """Recent chats, Programs and Settings in the simulator."""
+import hashlib
 import json
 import time
 
@@ -10,12 +11,32 @@ from test_chat import mark, no_lua_errors, shot, start_app, type_text, wait
 SIM_NOW = 1767225600
 
 
-def settled(sim, name):
-    """A screenshot taken after a few: the first ones can be stale frames."""
-    for _ in range(3):
-        shot(sim, name)
-        time.sleep(0.5)
-    return shot(sim, name)
+SEEN = set()
+
+
+def settled(sim, name, probe=None):
+    """A screenshot of a new screen. The simulator can hand back the frame
+    before the change, so retake until the image differs from every earlier
+    screenshot of this module (a screen is never drawn twice in these tests)."""
+    for _ in range(40):
+        path = shot(sim, name)
+        digest = hashlib.md5(path.read_bytes()).hexdigest()
+        ok = True
+        if probe:  # a pixel the target screen lights and the previous one does not
+            from PIL import Image
+            (x, y), want = probe
+            got = Image.open(path).convert("RGB").getpixel((x, y))
+            ok = all(abs(a - b) < 24 for a, b in zip(got, want))
+        if ok and digest not in SEEN:
+            SEEN.add(digest)
+            return path
+        time.sleep(0.25)
+    raise AssertionError(f"{name}: only stale frames")
+
+
+def note(sim):
+    """Remembers the current screen, so a stale frame of it is not taken for the next."""
+    SEEN.add(hashlib.md5(sim.screenshot()).hexdigest())
 
 
 def seed_chats(data, now):
@@ -40,11 +61,12 @@ def test_open_a_chat_from_recent_chats(llmchat):
     seed_chats(data, SIM_NOW)
     wait(sim, r"\[app\] screen chat", start_app(sim))
     time.sleep(0.5)
+    note(sim)
     m = mark(sim)
     sim.keypress("f1")
     wait(sim, r"\[app\] screen lists", m)
     time.sleep(0.5)
-    settled(sim, "recent-chats.png")
+    settled(sim, "recent-chats.png", ((200, 60), (40, 70, 130)))
     sim.keypress("right")
     time.sleep(0.4)
     settled(sim, "programs-empty.png")
@@ -69,11 +91,12 @@ def test_set_a_key_in_settings(llmchat):
     sim, api, data = llmchat(keys=False)
     wait(sim, r"\[app\] screen chat", start_app(sim))
     time.sleep(0.5)
+    note(sim)
     m = mark(sim)
     sim.keypress("f5")
     wait(sim, r"\[app\] screen settings", m)
     time.sleep(0.5)
-    shot(sim, "settings.png")
+    settled(sim, "settings.png", ((4, 34), (40, 70, 130)))
     for _ in range(3):  # Provider, Model, Claude key, OpenAI key
         sim.keypress("down")
         time.sleep(0.1)
@@ -81,10 +104,10 @@ def test_set_a_key_in_settings(llmchat):
     time.sleep(0.2)
     type_text(sim, "sk-e2e-0123456789")
     time.sleep(0.3)
-    shot(sim, "settings-editing.png")
+    settled(sim, "settings-editing.png")
     sim.keypress("enter")
     time.sleep(0.5)
-    shot(sim, "settings-masked.png")
+    settled(sim, "settings-masked.png")
     m = mark(sim)
     sim.keypress("esc")
     wait(sim, r"\[app\] screen chat", m)

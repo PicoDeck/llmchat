@@ -187,7 +187,7 @@ return {
         T.ok(s:find("dice.lua", 1, true), s)
         T.ok(s:find("from Dice roller  0.4 KB", 1, true), s)
         T.ok(s:find("snake.lua", 1, true))
-        T.ok(s:find("3.1 KB", 1, true))
+        T.ok(s:find("from a deleted chat  3.1 KB", 1, true), s)
         T.ok(not s:find("No programs yet", 1, true))
     end,
     programs_actions_call_task_13 = function()
