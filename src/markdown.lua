@@ -14,12 +14,24 @@ local M = {}
 
 local function trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
 
+-- Whether a closing __ (after a non-space, before a non-word) follows at or after `from`.
+local function underClose(s, from)
+    local j = from
+    while true do
+        j = s:find("__", j, true)
+        if not j then return false end
+        if not s:sub(j - 1, j - 1):match("%s") and not s:sub(j + 2, j + 2):match("[%w_]") then return true end
+        j = j + 1
+    end
+end
+
 -- Inline text to runs: **bold**, __bold__, `code`, [text](url) as text,
 -- *italic* as plain text. An unclosed ** or __ is bold to the end (a reply
 -- mid-stream); an unclosed backtick is literal.
 local function inline(s)
     local runs, buf = {}, {}
     local bold = false
+    local starClosers = {}
     local function flush(code)
         if #buf == 0 and not code then return end
         local text = table.concat(buf)
@@ -36,9 +48,24 @@ local function inline(s)
     while i <= n do
         local c = s:sub(i, i)
         local two = s:sub(i, i + 1)
-        if two == "**" or two == "__" then
+        if two == "**" then
             flush()
             bold = not bold
+            i = i + 2
+        elseif two == "__" then
+            local prev, after = s:sub(i - 1, i - 1), s:sub(i + 2, i + 2)
+            local ok
+            if bold then
+                ok = not s:sub(i - 1, i - 1):match("%s") and not after:match("[%w_]")
+            else
+                ok = not prev:match("[%w_]") and after ~= "" and not after:match("[%s_]") and underClose(s, i + 2)
+            end
+            if ok then
+                flush()
+                bold = not bold
+            else
+                buf[#buf + 1] = "__"
+            end
             i = i + 2
         elseif c == "`" then
             local close = s:find("`", i + 1, true)
@@ -61,12 +88,24 @@ local function inline(s)
                 i = i + 1
             end
         elseif c == "*" then
-            -- A single * is an italic marker (dropped) when it opens before a
-            -- non-space or closes after one; otherwise it is literal.
-            local prev, nxt = s:sub(i - 1, i - 1), s:sub(i + 1, i + 1)
-            local opens = nxt ~= "" and nxt ~= " " and s:find("*", i + 1, true)
-            local closes = prev ~= "" and prev ~= " "
-            if not (opens or closes) then buf[#buf + 1] = c end
+            -- A single * is dropped only as part of a well-formed italic
+            -- span (opener before a non-space, closer after one, same line).
+            if starClosers[i] then
+                starClosers[i] = nil
+            else
+                local prev, nxt = s:sub(i - 1, i - 1), s:sub(i + 1, i + 1)
+                local j
+                if nxt ~= "" and not nxt:match("[%s*]") and not prev:match("%w") then
+                    j = i + 1
+                    while true do
+                        j = s:find("*", j, true)
+                        if not j then break end
+                        if not s:sub(j - 1, j - 1):match("[%s*]") and s:sub(j + 1, j + 1) ~= "*" then break end
+                        j = j + 1
+                    end
+                end
+                if j then starClosers[j] = true else buf[#buf + 1] = c end
+            end
             i = i + 1
         else
             buf[#buf + 1] = c
@@ -79,6 +118,12 @@ end
 
 local function codeLine(s)
     return (fold.line(s):gsub("\t", "    "))
+end
+
+local function isRule(line)
+    local s = line:gsub("%s", "")
+    local c = s:sub(1, 1)
+    return #s >= 3 and (c == "-" or c == "*" or c == "_") and s == c:rep(#s)
 end
 
 -- Text to blocks.
@@ -115,7 +160,7 @@ function M.parse(text)
             blocks[#blocks + 1] = block
         elseif line:match("^%s*$") then
             endPara()
-        elseif line:match("^%s*([-*_])%s*%1%s*%1[%s%1]*$") then
+        elseif isRule(line) then
             endPara()
             blocks[#blocks + 1] = { kind = "rule" }
         elseif line:match("^%s*#+%s") or line:match("^%s*#+$") then

@@ -74,6 +74,32 @@ return {
         local b = MD.parse("\u{201C}hi\u{201D} \u{2014} ok\u{2026}")
         T.eq(b[1].runs[1].text, '"hi" -- ok...')
     end,
+    rules_of_any_length = function()
+        for _, l in ipairs({ "-----", "_____", "- - - -", "***", "___" }) do
+            local b = MD.parse(l)
+            T.eq(#b, 1, l)
+            T.eq(b[1].kind, "rule", l)
+        end
+        T.eq(MD.parse("--")[1].kind, "p")
+        T.eq(MD.parse("- a")[1].kind, "li")
+    end,
+    star_literal_unless_span = function()
+        local function one(s) local b = MD.parse(s); T.eq(#b[1].runs, 1, s); return b[1].runs[1].text end
+        T.eq(one("a*b"), "a*b")
+        T.eq(one("src/*.lua and *.txt"), "src/*.lua and *.txt")
+        T.eq(one("2 * 3 * 4"), "2 * 3 * 4")
+        T.eq(one("*italic*"), "italic")
+        T.eq(one("so *italic* here"), "so italic here")
+    end,
+    underscores_need_word_boundary = function()
+        local function one(s) local b = MD.parse(s); T.eq(#b[1].runs, 1, s); return b[1].runs[1].text end
+        T.eq(one("snake__case__x"), "snake__case__x")
+        T.same(MD.parse("a __bold__ b")[1].runs, { run("a "), run("bold", true), run(" b") })
+        T.same(MD.parse("__bold__")[1].runs, { run("bold", true) })
+        -- __init__ is bold "init" (as CommonMark reads it); the rest of the line stays plain.
+        T.same(MD.parse("call __init__ here")[1].runs, { run("call "), run("init", true), run(" here") })
+        T.eq(one("unclosed __ here"), "unclosed __ here")
+    end,
     empty = function()
         T.eq(#MD.parse(""), 0)
     end,
