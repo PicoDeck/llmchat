@@ -1,4 +1,5 @@
--- The world a program runs in (spec 9.3). Task 15 adds execute/cleanup.
+-- The world a program runs in (spec 9.3), and running a program in it (9.2,
+-- 9.4, 9.5).
 --
 -- Sandbox.newRun(pc, ctx) -> run
 --   ctx = {name, dataDir, appId, chatFonts = {ids}, readLib = fn(name) -> src | nil}
@@ -18,6 +19,18 @@
 --   run.appMenu   {label, fn} items of the app's own (Task 15's "Stop
 --                 program"): a program's sys.clearMenuItems() puts them back
 --   run.exited    true once the program called sys.exit()
+-- Sandbox.execute(pc, run, src) -> {status, err, secs, printed}
+--                 compiles src as ctx.name in run.env, saves the font in
+--                 run.saved, clears both framebuffers, adds "Stop program",
+--                 runs it under xpcall and cleans up. status: "ended",
+--                 "exit" (sys.exit), "stopped" (Stop program), "error" or
+--                 "compile"; err (the last two) and printed are cleanText'd
+-- Sandbox.cleanup(pc, run)  spec 9.4: drops run.env; releases what
+--                 run.tracked holds (callbacks first); clears the menu;
+--                 undoes every RESETS entry (UNDO); restores the five library
+--                 tables; collects. Safe to call twice
+-- Sandbox.UNDO    reset name -> the undo cleanup runs (one per RESETS name)
+-- Sandbox.cleanText(s, max)  a program's text as printable ASCII lines
 -- Sandbox.checkPath(dataDir, p) -> abs | nil, "access denied"
 -- Sandbox.STOP    the private sentinel sys.exit() raises
 -- Sandbox.lockStrings()  the app calls it once at start
@@ -52,7 +65,7 @@
 --     hands the program a buffer or object still holding bytes the chat left.
 --     sys.qmiPsram* is denied (umm_malloc, never cleared). The back buffer
 --     still holds the chat's last frame at the start of a run, and
---     display.getPixel/getBackBuffer read it: Task 15's execute clears both
+--     display.getPixel/getBackBuffer read it: execute clears both
 --     framebuffers before running the program (controller ruling R14). Image
 --     creation is safe: image.new, loadScaled, loadRegion, loadFromBuffer and
 --     the decoders all clear or fully fill the pixel buffer in the firmware.
@@ -67,11 +80,16 @@
 --   - The real sys.exit (sticky, it would close the chat): replaced by
 --     raising STOP.
 --   - Program code running inside the chat after the run: setmetatable
---     refuses __gc; menu items, connections and players are tracked for
---     cleanup; collectgarbage cannot stop or retune the collector.
---   - The app's own requests: not here; a program never runs while a reply
---     is arriving (9.2, Task 15).
+--     refuses __gc; collectgarbage cannot stop or retune the collector;
+--     cleanup clears the menu (the program's items), sets an HTTP
+--     connection's callbacks to nil before closing it (tcp:close drops its
+--     own), and replaces a player's finish and loop callbacks with a no-op
+--     before stopping it; the Stop item does nothing once the run is over;
+--     the message handler never calls a program's __tostring.
+--   - The app's own requests: App:runProgram refuses to run while a reply is
+--     arriving (9.2), and cancels a pending title request first.
 local AUDIT = require("src.sandbox_api")
+local Fold = require("src.fold")
 
 local Sandbox = {}
 Sandbox.AUDIT = AUDIT
@@ -82,6 +100,7 @@ local DENIED = "access denied"
 local _load, _type, _error, _pairs, _ipairs, _select = load, type, error, pairs, ipairs, select
 local _setmetatable, _getmetatable, _rawget, _tostring = setmetatable, getmetatable, rawget, tostring
 local _collectgarbage, _pcall, _next = collectgarbage, pcall, next
+local _xpcall, _rawequal = xpcall, rawequal
 local _tonumber, _tointeger, _mathtype = tonumber, math.tointeger, math.type
 local unpack, pack, concat, remove, sort = table.unpack, table.pack, table.concat, table.remove, table.sort
 local LIBS = { math = math, string = string, table = table, utf8 = utf8, coroutine = coroutine }
@@ -713,6 +732,246 @@ function Sandbox.newRun(pc, ctx)
     env.picocalc = buildPicocalc(run, pc, newObjects(run))
     ensureFolder(run)
     return run
+end
+
+-- ------------------------------------------------------------ running (spec 9.2, 9.4, 9.5)
+
+-- A call that may be missing (the firmware or a fake lacks the module) or
+-- may raise: cleanup goes on either way.
+local function try(mod, name, ...)
+    local f = _type(mod) == "table" and mod[name]
+    if _type(f) == "function" then return _pcall(f, ...) end
+    return false
+end
+
+local function closeObj(o) o:close() end
+local function stopObj(o) o:stop() end
+local function noop() end
+
+-- An HTTP connection's callbacks, set to nil before it closes: the firmware
+-- keeps them until the connection is collected, and they are program code.
+local HTTP_CALLBACKS = { "setRequestCallback", "setHeadersReadCallback", "setRequestCompleteCallback",
+                         "setConnectionClosedCallback" }
+local function detachHttp(c)
+    for _, m in _ipairs(HTTP_CALLBACKS) do
+        local f = c[m]
+        if f then _pcall(f, c, nil) end
+    end
+end
+
+-- A player's finish and loop callbacks are program code that the firmware
+-- fires later, from its service pass, even inside the chat. The setters take
+-- only a function, so each is replaced with a no-op, which also drops a
+-- pending call; then the player stops.
+local function quietPlayer(p)
+    if p.setFinishCallback then p:setFinishCallback(noop) end
+    if p.setLoopCallback then p:setLoopCallback(noop) end
+end
+
+-- What cleanup does to undo each reset in AUDIT (Sandbox.RESETS), after every
+-- run, whether or not the program made the call.
+Sandbox.UNDO = {
+    background = function(pc) try(pc.sys, "resumeBackground") end,
+    clip = function(pc) try(pc.display, "clearClipRect") end,
+    -- The font saved before the run (spec 9.4). Brightness is not saved:
+    -- programs can't set it (ruling R12; the firmware has no getBrightness).
+    font = function(pc, run)
+        local saved = run.saved and run.saved.font
+        if saved ~= nil then try(pc.display, "setFont", saved) end
+    end,
+    -- The full default scroll area and offset 0 (ruling R15).
+    scroll = function(pc)
+        try(pc.display, "setScrollArea", 0, 320, 160)
+        try(pc.display, "setScrollOffset", 0)
+    end,
+    ["repeat"] = function(pc) try(pc.input, "setRepeat", 200, 80) end,
+    transparent = function(pc) try(pc.graphics, "setTransparentColor", nil) end,
+    preload = function(pc) try(pc.graphics and pc.graphics.image, "cancelPreload") end,
+    sprites = function(pc) try(pc.graphics and pc.graphics.sprite, "removeAll") end,
+    tone = function(pc) try(pc.audio, "stopTone") end,
+    volume = function(pc) try(pc.audio, "setVolume", 100) end,
+    stream = function(pc) try(pc.audio, "stopStream") end,
+    fps = function(pc) try(pc.perf, "setTargetFPS", 0) end,
+}
+local UNDO = Sandbox.UNDO
+
+local function emptyOut(t)
+    for k in _pairs(t) do t[k] = nil end
+end
+
+-- Puts each of the five real library tables back as the snapshot newRun took:
+-- changed and removed fields are restored, added ones dropped (spec 9.3's
+-- backstop; a program only ever sees copies).
+local function restoreLibraries(run)
+    for name, snap in _pairs(run.snapshot or {}) do
+        local real = LIBS[name]
+        for k in _pairs(real) do
+            if snap[k] == nil then real[k] = nil end
+        end
+        for k, v in _pairs(snap) do
+            if real[k] ~= v then real[k] = v end
+        end
+    end
+end
+
+-- Sandbox.cleanup(pc, run): the Lua-visible version of the firmware's exit
+-- teardown (spec 9.4), safe to call twice. The program's env is dropped
+-- first, so what it held can be collected. Then: the connections and players
+-- the program made, with their callbacks; the menu (the program's items and
+-- "Stop program": spec 9.2 removes the item after cleanup, but its callback
+-- is inert once the run is over, and this way no program item can be chosen
+-- during cleanup); files and fonts; every reset in AUDIT; the five library
+-- tables; and a full collection. Each step is protected, so one that fails
+-- (out of memory, a firmware error) does not skip the rest.
+function Sandbox.cleanup(pc, run)
+    run.active = false
+    run.env = nil
+    local t = run.tracked
+    -- Program code the firmware could still call goes first: connections
+    -- (tcp:close drops its callbacks itself) and players.
+    for k, c in _pairs(t.http) do
+        t.http[k] = nil
+        _pcall(detachHttp, c)
+        _pcall(closeObj, c)
+    end
+    for k, c in _pairs(t.tcp) do
+        t.tcp[k] = nil
+        _pcall(closeObj, c)
+    end
+    for k, p in _pairs(t.sound) do
+        t.sound[k] = nil
+        _pcall(quietPlayer, p)
+        _pcall(stopObj, p)
+    end
+    -- The menu: the program's items and "Stop program" (the chat has none of
+    -- its own outside a run).
+    try(pc.sys, "clearMenuItems")
+    emptyOut(t.menu)
+    emptyOut(run.appMenu)
+    -- fs handles close with fs.close; a zip archive (also tracked as a file)
+    -- has its own :close().
+    for k, h in _pairs(t.file) do
+        t.file[k] = nil
+        if not try(pc.fs, "close", h) then _pcall(closeObj, h) end
+    end
+    -- loadFont ids are unloaded (never one of the chat's); font.new objects
+    -- free their slot when collected, below.
+    local chat = {}
+    for _, id in _ipairs(run.ctx and run.ctx.chatFonts or {}) do chat[id] = true end
+    for k, f in _pairs(t.font) do
+        t.font[k] = nil
+        if _mathtype(f) == "integer" and not chat[f] then try(pc.display, "unloadFont", f) end
+    end
+    local names = {}
+    for name in _pairs(Sandbox.RESETS) do names[#names + 1] = name end
+    sort(names)
+    for _, name in _ipairs(names) do _pcall(UNDO[name], pc, run) end
+    _pcall(restoreLibraries, run)
+    -- Twice: a finaliser that runs in the first (a connection's) can release
+    -- the last reference to more (its callbacks, and the env behind them).
+    _collectgarbage("collect")
+    _collectgarbage("collect")
+    run.cleaned = true
+end
+
+local MAX_ERR = 600
+local MAX_ERR_LINES = 12
+
+-- A program's error or printed text made safe to draw in 6x8 and to send:
+-- folded to printable ASCII line by line, tabs as spaces, and cut to `max`
+-- bytes ("..." when cut).
+local function cleanText(s, max)
+    local out = {}
+    for line in (s .. "\n"):gmatch("([^\n]*)\n") do
+        line = Fold.line(Fold.decode(line)):gsub("\t", " ")
+        out[#out + 1] = line
+        if #out >= MAX_ERR_LINES then break end
+    end
+    local text = concat(out, "\n")
+    if #text > max then text = text:sub(1, max - 3) .. "..." end
+    return text
+end
+Sandbox.cleanText = cleanText
+
+-- The message handler: no traceback (debug is blocked) and no program code.
+-- tostring on a program's table could run its __tostring, inside the chat's
+-- handler, so only strings and numbers give their text, as lua.c does without
+-- the metamethod.
+local function handler(e)
+    if _rawequal(e, STOP) then return STOP end
+    local ty = _type(e)
+    if ty == "string" then return e end
+    if ty == "number" then return _tostring(e) end
+    return "(error object is a " .. ty .. " value)"
+end
+
+local function seconds(t0, t1)
+    local ms = (_tonumber(t1) or 0) - (_tonumber(t0) or 0)
+    if ms < 0 then ms = 0 end
+    return math.floor(ms / 1000 + 0.5)
+end
+
+-- Clears both framebuffers, so the program can't read the chat's last frame
+-- with display.getPixel or getBackBuffer (ruling R14): clear and flush, twice.
+local function blank(d)
+    try(d, "clearClipRect")
+    for _ = 1, 2 do
+        d.clear(d.BLACK)
+        d.flush()
+    end
+end
+
+-- Sandbox.execute(pc, run, src) -> {status, err, secs, printed}: spec 9.2's
+-- steps 3-6 for a run made by newRun. status is "ended" (it returned), "exit"
+-- (sys.exit), "stopped" (Stop program), "error" or "compile". err (only for
+-- those last two) and printed (the last 5 lines) are cleanText'd; secs is
+-- whole seconds. The run is cleaned up before this returns.
+function Sandbox.execute(pc, run, src)
+    local name = run.ctx.name
+    local fn, cerr = _load(src, "=" .. name, "t", run.env)
+    if not fn then
+        Sandbox.cleanup(pc, run)
+        return { status = "compile", err = cleanText(_tostring(cerr), MAX_ERR), secs = 0, printed = {} }
+    end
+    local sys, d = pc.sys, pc.display
+    run.saved = { font = d.getFont and d.getFont() or d.FONT_6X8 }
+    blank(d)
+    -- "Stop program" (spec 9.5): the callback ends the program by raising
+    -- STOP, but only while it runs; the item is in run.appMenu so the
+    -- program's own clearMenuItems puts it back.
+    local item = { label = "Stop program" }
+    function item.fn()
+        if run.active then
+            run.stopping = true
+            _error(STOP, 0)
+        end
+    end
+    run.appMenu[#run.appMenu + 1] = item
+    sys.addMenuItem(item.label, item.fn)
+    local t0 = sys.getTimeMs()
+    run.active = true
+    local ok, err = _xpcall(fn, handler)
+    run.active = false
+    local t1 = sys.getTimeMs()
+    fn = nil -- with run.env (cleanup), the last references to the program
+    local status
+    if ok then
+        status = "ended"
+    elseif _rawequal(err, STOP) then
+        status = run.stopping and "stopped" or "exit"
+    else
+        status = "error"
+    end
+    if status ~= "error" then err = nil end
+    Sandbox.cleanup(pc, run)
+    local printed = {}
+    for i, line in _ipairs(run.printed) do printed[i] = cleanText(line, MAX_LINE) end
+    return {
+        status = status,
+        err = err and cleanText(err, MAX_ERR) or nil,
+        secs = seconds(t0, t1),
+        printed = printed,
+    }
 end
 
 return Sandbox

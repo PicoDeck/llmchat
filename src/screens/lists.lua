@@ -4,7 +4,8 @@
 -- The Programs tab reads app.programs (Task 13): list() -> rows
 --   { name, chat = <chat title or nil>, chatId = <id or nil>, size = <bytes>,
 --     updated = <epoch> }, newest first; delete(name) -> true; and
--- app:runProgram(name) for Enter. Missing pieces are skipped quietly.
+-- app:runProgram(name, {chatId} | {orphan = true}) for Enter (Task 15).
+-- Missing pieces are skipped quietly.
 local Keys = require("src.keys")
 local Age = require("src.age")
 
@@ -124,9 +125,16 @@ function S:key(ev)
         end
     else
         if is("ENTER") then
-            if app.runProgram then app:runProgram(row.name) end
+            -- in its chat, opened first (spec 9.6); an orphan runs on its own
+            if app.runProgram then
+                app:runProgram(row.name, row.chatId and { chatId = row.chatId } or { orphan = true })
+            end
         elseif is("F4") then
-            if row.chatId then app:go("chat", { open = row.chatId }) end
+            if row.chatId then
+                app:go("chat", { open = row.chatId })
+            else
+                app.pc.ui.toast("Its chat was deleted")
+            end
         elseif is("DEL") then
             self:deleteProgram(row)
         end

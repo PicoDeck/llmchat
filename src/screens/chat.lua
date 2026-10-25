@@ -101,11 +101,19 @@ function S:enter(arg)
     elseif not self.loaded then
         self:loadDraft()
     end
+    if arg and arg.follow then self.follow = true end
     self.loaded = true
     self.prevState = chat.state
 end
 
 function S:leave() self:saveDraft() end
+
+-- Forgets the laid-out rows (rebuilt at the next draw), to leave a program
+-- as much memory as possible (spec 9.2 step 2).
+function S:dropCaches()
+    self.cache = setmetatable({}, { __mode = "k" })
+    self.entries, self.liveState, self.layVer = {}, nil, nil
+end
 
 function S:newChat()
     if self.chat.state ~= "idle" then self.chat:stop() end

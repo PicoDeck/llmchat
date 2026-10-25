@@ -142,7 +142,62 @@ function Chat:note(kind, text, isError)
     self:_persist()
 end
 
-function Chat:lastProgram() return self.lastProgramName end
+-- The newest program saved from this chat's replies (F3's), or nil. A
+-- reopened chat finds it in its replies' per-block names (item.programs).
+function Chat:lastProgram()
+    if self.lastProgramName then return self.lastProgramName end
+    for i = #self.items, 1, -1 do
+        local per = self.items[i].role == "assistant" and self.items[i].programs
+        if type(per) == "table" then
+            for j = #per, 1, -1 do
+                if type(per[j]) == "string" then
+                    self.lastProgramName = per[j]
+                    return per[j]
+                end
+            end
+        end
+    end
+    return nil
+end
+
+-- --------------------------------------------------------------- fixing
+
+-- The message that asks for a fix (spec 9.6). result: Sandbox.execute's
+-- ({err, printed}); the "It printed:" block only when it printed something.
+function Chat.fixText(name, result)
+    local lines = { name .. " stopped with an error:", result.err or "" }
+    local printed = result.printed or {}
+    if #printed > 0 then
+        lines[#lines + 1] = "It printed:"
+        for _, l in ipairs(printed) do lines[#lines + 1] = l end
+    end
+    lines[#lines + 1] = "Please send a fixed version of the whole program."
+    return table.concat(lines, "\n")
+end
+
+-- Appends the fix request and sends it: true | false, why (as send). The code
+-- is already in the conversation, so it isn't resent. With `code` (a program
+-- whose chat was deleted; this is a new chat), the message starts with the
+-- program in a lua fence, and this chat becomes the program's owner, so the
+-- fixed version saves over the same file.
+function Chat:askFix(name, result, code)
+    local text = Chat.fixText(name, result)
+    if code then
+        if code:sub(-1) ~= "\n" then code = code .. "\n" end
+        text = "```lua\n" .. code .. "```\n" .. text
+        if self.title == "" then self.title = "Fix " .. name end
+    end
+    local ok, why = self:send(text)
+    if not ok or not code then return ok, why end
+    local progs = self.deps.programs
+    if not self.id then self.id = self.deps.store:newId(self:_clock()) end
+    if progs then
+        local adopted, err = progs:adopt(name, self.id)
+        if not adopted then self:_push("error", "Couldn't take over " .. name .. ": " .. tostring(err), true) end
+    end
+    self:_persist() -- the owner's chat is on the card before its reply
+    return true
+end
 
 -- ------------------------------------------------------------------ sending
 

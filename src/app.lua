@@ -14,6 +14,7 @@ local Programs = require("src.programs")
 local Prompt = require("src.prompt")
 local Fonts = require("src.fonts")
 local Theme = require("src.theme")
+local Sandbox = require("src.sandbox")
 
 local App = {}
 App.__index = App
@@ -27,6 +28,7 @@ App.SCREENS = {
 
 function App.new(pc, appId, appDir)
     local self = setmetatable({ pc = pc, appId = appId, dir = appDir, screens = {}, dirty = true, running = true }, App)
+    Sandbox.lockStrings() -- spec 9.3: getmetatable("") can't reach the real string table
     self.W = require("src.widgets")
     self.theme = Theme.new(pc.display)
     self.store = Store.new(pc.fs, pc.json, "/data/" .. appId)
@@ -53,7 +55,8 @@ function App.new(pc, appId, appDir)
 end
 
 -- Makes screen `name` current. arg goes to its enter (the chat screen takes
--- {open = id} or {new = true}; nil resumes what is open).
+-- {open = id} or {new = true}, and {follow = true} to scroll to the end;
+-- nil resumes what is open).
 function App:go(name, arg)
     local mod = App.SCREENS[name]
     assert(mod, "no screen " .. tostring(name))
@@ -72,6 +75,94 @@ end
 
 function App:quit() self.running = false end
 
+-- ------------------------------------------------------------ programs
+
+-- Discards queued keys and events (spec 9.2 step 7).
+local function drainInput(input)
+    pcall(input.clearState)
+    for _ = 1, 64 do
+        local ok, ev = pcall(input.pollEvent)
+        if not ok or not ev then break end
+    end
+end
+
+local function logLine(pc, name, result)
+    local line = "[run] " .. name .. " " .. result.status .. " " .. result.secs .. " s"
+    if result.err then line = line .. ": " .. (result.err:match("^[^\n]*")):sub(1, 120) end
+    pc.sys.log(line)
+end
+
+-- Runs saved program `name` (spec 9.2). Called with no opts by F3 and by the
+-- error screen for a program of the open chat: the run reports there.
+-- opts.chatId (a run from the Programs tab): the program's chat, opened first
+-- (spec 9.6), then as F3. opts.orphan: the program's chat was deleted; it
+-- reports with a toast and goes back to the Programs tab. A normal end, a
+-- sys.exit() or Stop program adds the note "<name> ended after N s" (or
+-- "stopped after"); an error opens the error screen with {name, result,
+-- chatId}. Returns the result, or nil and why it did not run.
+function App:runProgram(name, opts)
+    opts = opts or {}
+    local pc, chat = self.pc, self.chat
+    -- 1. Never while a reply arrives: its callbacks would run inside the program.
+    if chat.state ~= "idle" then
+        pc.ui.toast("Wait for the reply to finish")
+        return nil, "busy"
+    end
+    local orphan = opts.orphan
+    if opts.chatId and chat.id ~= opts.chatId then
+        self:go("chat", { open = opts.chatId })
+        if chat.id ~= opts.chatId then orphan = true end -- its chat can't be read
+    end
+    chat:cancelTitle()
+    -- 2. Read it; leave it as much memory as possible.
+    local src = self.programs:read(name)
+    if not src then
+        pc.ui.toast("Couldn't read " .. name)
+        return nil, "unreadable"
+    end
+    local cs = self.screens.chat
+    if cs and cs.dropCaches then cs:dropCaches() end
+    collectgarbage("collect")
+    local ctx = {
+        name = name, dataDir = self.programs:dataDir(name), appId = self.appId,
+        chatFonts = { table.unpack(self.fonts.loaded or {}) },
+        readLib = function(lib)
+            local ok, text = pcall(pc.fs.readFile, "/system/lib/" .. lib .. ".lua")
+            return ok and type(text) == "string" and text or nil
+        end,
+    }
+    -- 3-6. Compile, prepare, run, clean up (src/sandbox.lua). A failure of the
+    -- runner itself is contained too.
+    drainInput(pc.input)
+    local okNew, run = pcall(Sandbox.newRun, pc, ctx)
+    local ok, result
+    if okNew then ok, result = pcall(Sandbox.execute, pc, run, src) else ok, result = false, run end
+    if not ok then
+        if okNew then pcall(Sandbox.cleanup, pc, run) end
+        result = { status = "error", err = Sandbox.cleanText("The runner failed: " .. tostring(result), 600),
+                   secs = 0, printed = {} }
+    end
+    run, src = nil, nil
+    -- 7. The keys that ended the program don't act in the chat.
+    drainInput(pc.input)
+    logLine(pc, name, result)
+    -- 8. Report.
+    local status = result.status
+    if status == "error" or status == "compile" then
+        self:go("programError", { name = name, result = result, chatId = not orphan and chat.id or nil })
+        return result
+    end
+    local text = name .. (status == "stopped" and " stopped after " or " ended after ") .. result.secs .. " s"
+    if orphan then
+        pc.ui.toast(text)
+        self:go("lists", { tab = 2 })
+    else
+        chat:note("program", text)
+        self:go("chat", { follow = true })
+    end
+    return result
+end
+
 -- One pass of the main loop.
 function App:frame()
     local pc = self.pc
@@ -88,7 +179,11 @@ function App:frame()
     local now = pc.sys.getTimeMs()
     self.chat:tick(now)
     if self.screen:tick(now) then self.dirty = true end
-    if self.dirty then
+    -- flush swaps the two framebuffers without copying, so a frame is drawn
+    -- twice, once into each: a screen that then stays still (the lists, the
+    -- error screen) doesn't alternate with an older frame.
+    if self.dirty or self.again then
+        self.again = self.dirty
         self.dirty = false
         self.screen:draw()
     end

@@ -22,6 +22,7 @@ function M.new()
         requests = {}, pending = {}, streaming = {}, config = {}, conns = 0, made = {},
         rects = {}, spinners = {}, areas = {}, fields = {}, radios = {}, outlines = {}, textYs = {}, fontFiles = {}, missingFonts = {}, nextFontId = 4,
         netStatus = 1, clockSynced = true, epoch = 1792000000, ms = 0,
+        handles = {}, menuAdds = 0, paused = false, inputCleared = 0, textColors = {}, buttons = {}, panels = {},
     }
     local fs, files = fakes.fs()
     F.files = files
@@ -42,8 +43,10 @@ function M.new()
             buf = files[p]
             if buf == nil then return nil, "cannot open file" end
         end
-        return { path = p, mode = mode, writable = writable, buf = buf,
-                 pos = mode:find("a", 1, true) and #buf or 0 }
+        local h = { path = p, mode = mode, writable = writable, buf = buf,
+                    pos = mode:find("a", 1, true) and #buf or 0 }
+        F.handles[h] = true
+        return h
     end
     function fs.write(h, s)
         if fs.failWrite then return -1 end
@@ -86,6 +89,7 @@ function M.new()
     end
     function fs.close(h)
         if h == nil then return end
+        F.handles[h] = nil
         if h.writable then
             local text = h.buf
             if fs.shortClose then text = text:sub(1, -2) end
@@ -105,6 +109,17 @@ function M.new()
         return out
     end
     F.responder = function() return 404, {}, "no responder" end
+    -- Handles opened and not closed yet; connections not closed or released.
+    function F.openHandles()
+        local n = 0
+        for _ in pairs(F.handles) do n = n + 1 end
+        return n
+    end
+    function F.liveConns()
+        local n = 0
+        for _, c in ipairs(F.made) do if not c.released then n = n + 1 end end
+        return n
+    end
 
     -- One firmware service pass: starts pending requests and delivers the
     -- next chunk of each response in flight. Callbacks run here, as on the
@@ -191,6 +206,7 @@ function M.new()
     function display.clear()
         F.texts, F.textFonts, F.rects, F.textXs, F.textYs = {}, {}, {}, {}, {}
         F.spinners, F.areas, F.fields, F.radios, F.outlines = {}, {}, {}, {}, {}
+        F.textColors, F.buttons, F.panels = {}, {}, {}
         F.clears = (F.clears or 0) + 1
     end
     -- The clip rect is recorded (F.clip, nil when full screen), not applied.
@@ -204,7 +220,15 @@ function M.new()
     function display.setFont(id) F.font = id end
     function display.getFont() return F.font end
     function display.fillRect(x, y, w, h, c) F.rects[#F.rects + 1] = { x = x, y = y, w = w, h = h, c = c } end
-    function display.drawText(x, y, t) record(t); F.textXs[#F.texts] = x; F.textYs[#F.texts] = y; return display.textWidth(t) end
+    function display.drawText(x, y, t, fg)
+        record(t)
+        F.textXs[#F.texts], F.textYs[#F.texts], F.textColors[#F.texts] = x, y, fg
+        return display.textWidth(t)
+    end
+    -- The hardware scroll area and offset (F.scrollArea = {top, height,
+    -- bottom}, F.scrollOffset), recorded.
+    function display.setScrollArea(t, h, b) F.scrollArea = { t, h, b } end
+    function display.setScrollOffset(o) F.scrollOffset = o end
     -- The OS draws toasts and the system menu at a flush in the current font.
     function display.flush() F.frames = (F.frames or 0) + 1; F.flushFont = F.font; F.service() end
 
@@ -225,6 +249,16 @@ function M.new()
         F.radios[#F.radios + 1] = { x = x, y = y, selected = selected, focused = focused }
     end
     function ui.drawDivider() end
+    -- A panel's title is recorded as "[P] title"; a button as "[B] label",
+    -- or "[B*] label" when focused (F.panels, F.buttons have the rest).
+    function ui.drawPanel(x, y, w, h, title)
+        record("[P] " .. (title or ""))
+        F.panels[#F.panels + 1] = { x = x, y = y, w = w, h = h, title = title }
+    end
+    function ui.drawButton(x, y, w, label, focused)
+        record((focused and "[B*] " or "[B] ") .. label)
+        F.buttons[#F.buttons + 1] = { x = x, y = y, w = w, label = label, focused = focused }
+    end
     -- Word wrap to maxCols: the 0-based start offset of each row, and their number.
     function ui.wrapText(text, maxCols)
         local segs, start = { 0 }, 0
@@ -254,14 +288,25 @@ function M.new()
     for name, v in pairs(BTN) do input["BTN_" .. name] = v end
     function input.update() F.service() end
     function input.pollEvent() return table.remove(F.events, 1) end
-    function input.clearState() end
+    -- Drops the queued events, as the firmware does (F.inputCleared counts calls).
+    function input.clearState()
+        F.events = {}
+        F.inputCleared = F.inputCleared + 1
+    end
+    function input.setRepeat(delay, rate) F.repeatCfg = { delay, rate } end
 
     local sys = {}
     function sys.log(m) F.logs[#F.logs + 1] = m end
     function sys.getTimeMs() return F.ms end
     function sys.getClock() return { synced = F.clockSynced, epoch = F.clockSynced and F.epoch or 0, hour = 0, min = 0, sec = 0 } end
     function sys.sleep(ms) F.ms = F.ms + ms; F.service() end
-    function sys.addMenuItem(label, fn) F.menu[label] = fn end
+    function sys.addMenuItem(label, fn)
+        F.menu[label] = fn
+        F.menuAdds = F.menuAdds + 1
+    end
+    -- F.paused: background work paused by pauseBackground.
+    function sys.pauseBackground() F.paused = true; return true end
+    function sys.resumeBackground() F.paused = false end
     function sys.clearMenuItems()
         for k in pairs(F.menu) do F.menu[k] = nil end
     end

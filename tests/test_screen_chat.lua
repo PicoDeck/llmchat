@@ -253,14 +253,21 @@ return {
         T.eq(F.flushFont, F.pc.display.FONT_6X8)
     end,
 
+    -- A change is drawn twice, once into each framebuffer (flush swaps them
+    -- without copying), and then not again until the next change.
     draws_only_when_dirty = function()
         local F, app = setup()
+        frames(app) -- the first frame again, into the other buffer
         local n = F.clears
-        frames(app, 5) -- 50 ms: no key, no reply, before the first cursor blink
+        frames(app, 4) -- no key, no reply, before the first cursor blink
         T.eq(F.clears, n)
         F.type("x")
         frames(app)
         T.eq(F.clears, n + 1)
+        frames(app)
+        T.eq(F.clears, n + 2, "drawn into the other buffer too")
+        frames(app, 2)
+        T.eq(F.clears, n + 2)
     end,
 
     keys_to_widget = function()
