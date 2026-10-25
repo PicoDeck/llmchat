@@ -59,16 +59,31 @@ function M.new()
         h.pos = h.pos + #s
         return s
     end
+    -- As the firmware: the offset is read with luaL_checkinteger (numeric
+    -- strings and integral floats accepted), whence with luaL_checkoption, and
+    -- a position past the end is accepted (FatFS grows a write handle there).
     function fs.seek(h, offset, whence)
+        local n = tonumber(offset)
+        local off = n and math.tointeger(n)
+        if off == nil then error("bad argument #2 to 'seek' (number has no integer representation)") end
+        whence = whence or "set"
+        if whence ~= "set" and whence ~= "cur" and whence ~= "end" then
+            error("bad argument #3 to 'seek' (invalid option '" .. tostring(whence) .. "')")
+        end
+        if whence == "set" and off < 0 then error("bad argument #2 to 'seek' (negative offset)") end
         local base = 0
         if whence == "cur" then base = h.pos elseif whence == "end" then base = #h.buf end
-        local target = base + offset
-        if target < 0 then return false end
+        local target = base + off
+        if target < 0 then error("bad argument #2 to 'seek' (position before start of file)") end
         h.pos = target
         return true
     end
     function fs.tell(h) return h.pos end
-    function fs.fsize(h) return #h.buf end
+    -- fs.failFsize: fsize returns nil, as the firmware does past 2 GB.
+    function fs.fsize(h)
+        if fs.failFsize then return nil, "fsize failed" end
+        return #h.buf
+    end
     function fs.close(h)
         if h == nil then return end
         if h.writable then

@@ -82,6 +82,7 @@ local DENIED = "access denied"
 local _load, _type, _error, _pairs, _ipairs, _select = load, type, error, pairs, ipairs, select
 local _setmetatable, _getmetatable, _rawget, _tostring = setmetatable, getmetatable, rawget, tostring
 local _collectgarbage, _pcall, _next = collectgarbage, pcall, next
+local _tonumber, _tointeger, _mathtype = tonumber, math.tointeger, math.type
 local unpack, pack, concat, remove, sort = table.unpack, table.pack, table.concat, table.remove, table.sort
 local LIBS = { math = math, string = string, table = table, utf8 = utf8, coroutine = coroutine }
 local PASS = { "assert", "error", "ipairs", "next", "pairs", "pcall", "xpcall", "select", "tonumber",
@@ -140,6 +141,14 @@ local function copy(t)
     local c = {}
     for k, v in _pairs(t) do c[k] = v end
     return c
+end
+
+-- An integer the way luaL_checkinteger reads one (numbers, numeric strings,
+-- integral floats), or nil.
+local function toInteger(v)
+    local n = _tonumber(v)
+    if n == nil then return nil end
+    return _tointeger(n)
 end
 
 local function weakList() return _setmetatable({}, { __mode = "v" }) end
@@ -386,60 +395,78 @@ end
 
 -- fs file handles. open returns a File proxy (a table with a locked
 -- metatable) instead of the real handle, so a program cannot reach the real
--- handle's seek through its metatable. On a writable handle, seek (by either
--- fs.seek(h, ...) or h:seek(...)) refuses any position past the end of the
--- file: FatFS extends a write handle's chain without clearing it, so the gap
--- would hold bytes from deleted files, the chat's keys among them. The
--- handle functions share the same code, since fs.read(h, n) and h:read(n)
--- are one function in the firmware.
+-- handle's seek through its metatable. seek, by either fs.seek(h, ...) or
+-- h:seek(...), refuses any position past the end of the file: FatFS extends
+-- a write handle's chain without clearing it, so the gap would hold bytes
+-- from deleted files, the chat's keys among them. The guard runs on every
+-- handle (a refused seek past the end of a read handle costs nothing), so it
+-- does not depend on reading the open mode the way the firmware does.
+--
+-- It works in integers and fails closed. The firmware reads the offset with
+-- luaL_checkinteger, which also takes numeric strings (" 0x40 ", "1e2") and
+-- integral floats, so the offset is normalised with
+-- math.tointeger(tonumber(offset)) and refused when that gives nil; the
+-- normalised integer is what reaches the real seek. fsize and tell must
+-- return integers (the firmware's fsize returns nil past 2 GB), or the seek
+-- is refused. Integers also avoid the device's single-float rounding.
+--
+-- The handle functions share the same code, since fs.read(h, n) and
+-- h:read(n) are one function in the firmware.
+local WHENCE = { set = true, cur = true, ["end"] = true }
+
 local function fileSystem(run)
     if run._files then return run._files end
     local fs = run.pc.fs
-    local realOf = _setmetatable({}, { __mode = "k" })    -- proxy -> real handle
-    local writableOf = _setmetatable({}, { __mode = "k" }) -- proxy -> bool
-    local M = {}
+    local realOf = _setmetatable({}, { __mode = "k" }) -- proxy -> real handle
 
+    -- The real handle behind a File proxy; anything else (a forged table, a
+    -- real handle from elsewhere) is refused, so no handle skips the guard.
     local function real(h)
-        if h == nil then return nil end
         local r = realOf[h]
-        if r ~= nil then return r end
-        return h
+        if r == nil then _error("bad argument #1 (file expected)", 3) end
+        return r
     end
 
     local function seek(h, offset, whence)
         local r = real(h)
-        if writableOf[h] and _type(offset) == "number" then
-            local ok, size = _pcall(fs.fsize, r)
-            if ok and _type(size) == "number" then
-                local base = 0
-                if whence == "cur" then
-                    local okt, t = _pcall(fs.tell, r)
-                    base = (okt and _type(t) == "number") and t or 0
-                elseif whence == "end" then
-                    base = size
-                end
-                if base + offset > size then return false end
-            end
+        if whence == nil then whence = "set" end
+        if not WHENCE[whence] then _error("bad argument #3 to 'seek' (invalid option)", 2) end
+        local off = toInteger(offset)
+        if off == nil then _error("bad argument #2 to 'seek' (number has no integer representation)", 2) end
+        local okS, size = _pcall(fs.fsize, r)
+        if not okS or _mathtype(size) ~= "integer" or size < 0 then return false end
+        local base = 0
+        if whence == "cur" then
+            local okT, t = _pcall(fs.tell, r)
+            if not okT or _mathtype(t) ~= "integer" then return false end
+            base = t
+        elseif whence == "end" then
+            base = size
         end
-        return fs.seek(r, offset, whence)
+        -- 0 <= base <= size keeps size - base from overflowing in 32 bits.
+        if base < 0 or base > size or off > size - base then return false end
+        return fs.seek(r, off, whence)
     end
 
-    M.read = function(h, n) return fs.read(real(h), n) end
-    M.write = function(h, s) return fs.write(real(h), s) end
-    M.tell = function(h) return fs.tell(real(h)) end
-    M.fsize = function(h) return fs.fsize(real(h)) end
-    M.seek = seek
-    M.close = function(h)
-        if h == nil then return fs.close(nil) end
-        return fs.close(real(h))
-    end
-
-    -- The proxy's methods are the same functions (self is argument 1), so
-    -- h:read(n) and fs.read(h, n) behave identically, as in the firmware.
-    local meta = { __index = M, __metatable = false, __name = "file",
+    -- What a handle offers; h:read(n) and fs.read(h, n) are the same call.
+    local H = {
+        read = function(h, n) return fs.read(real(h), n) end,
+        write = function(h, s) return fs.write(real(h), s) end,
+        tell = function(h) return fs.tell(real(h)) end,
+        fsize = function(h) return fs.fsize(real(h)) end,
+        seek = seek,
+        close = function(h)
+            if h == nil then return fs.close(nil) end
+            return fs.close(real(h))
+        end,
+    }
+    local meta = { __index = H, __metatable = false, __name = "file",
                    __tostring = function() return "file" end,
-                   __close = function(self) M.close(self) end }
+                   __close = function(self) H.close(self) end }
 
+    -- The fs module's functions: the handle calls plus open.
+    local M = {}
+    for k, f in _pairs(H) do M[k] = f end
     M.open = function(path, mode)
         local abs = checkPath(run.dataDir, path)
         if not abs then return nil, DENIED end
@@ -450,7 +477,6 @@ local function fileSystem(run)
         addTracked(run, "file", h)
         local p = _setmetatable({}, meta)
         realOf[p] = h
-        writableOf[p] = mode:find("[wa+]") ~= nil
         return p
     end
 
@@ -511,7 +537,8 @@ function WRAPS.unloadFont(run, real)
     local chat = {}
     for _, id in _ipairs(run.ctx.chatFonts or {}) do chat[id] = true end
     return function(id)
-        if _type(id) ~= "number" or chat[id] then return end
+        id = toInteger(id) -- the firmware reads it as an integer, strings included
+        if id == nil or chat[id] then return end
         local list = run.tracked.font
         for k, v in _pairs(list) do
             if v == id then

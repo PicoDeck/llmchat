@@ -359,14 +359,110 @@ return {
         fs.write(w, "Z")
         fs.close(w)
         T.eq(F.files[DATA .. "/s2.txt"], "abcZef")
-        -- a read handle may seek anywhere (firmware clamps; no write, no gap)
+        -- the guard covers every handle, read ones too: a refused seek past
+        -- the end of a read handle costs nothing, and the guard never relies
+        -- on reading the open mode the way the firmware does
         local rd = fs.open("save.txt", "r")
         T.ok(rd)
-        T.eq(rd:seek(100, "set"), true, "read handle seek allowed")
-        T.eq(rd:read(1), nil)
+        T.eq(rd:seek(100, "set"), false, "read handle seek past EOF")
+        T.eq(rd:seek(0, "set"), true)
+        T.eq(rd:read(1), "X")
         fs.close(rd)
         -- fs.close(nil) is a no-op, as in the firmware
         fs.close(nil)
+        -- the handle offers only handle calls, and a forged handle is refused
+        local p = fs.open("p.txt", "w")
+        T.eq(p.open, nil, "a handle exposes open")
+        T.raises(function() fs.seek(setmetatable({}, {}), 0) end, "file expected")
+        T.raises(function() fs.write({}, "x") end, "file expected")
+        T.raises(function() p.seek({}, 0) end, "file expected")
+        fs.close(p)
+    end,
+
+    -- The firmware reads the offset with luaL_checkinteger, so numeric
+    -- strings and integral floats are offsets too. Each form past the end is
+    -- refused on both routes, and none grows the file over a gap. The fake's
+    -- seek coerces the same way, so a guard that skipped strings would fail.
+    seek_offsets_normalised = function()
+        local cases = {
+            { "50", "set" }, { " 0x40 ", "set" }, { "1e2", "set" },
+            { "50", "cur" }, { " 0x40 ", "cur" }, { "1e2", "cur" },
+            { "50", "end" }, { " 0x40 ", "end" }, { "1e2", "end" },
+            { 50.0, "set" }, { 50.0, nil }, { "50", nil },
+            { 1.5, "set" }, { "1.5", "cur" }, { "abc", "set" }, { {}, "set" }, { nil, "set" },
+            { 0, "bogus" },
+        }
+        for _, route in ipairs({ "method", "module" }) do
+            for _, c in ipairs(cases) do
+                local r, F = mk()
+                local fs = r.env.picocalc.fs
+                local h = fs.open("g.txt", "w")
+                fs.write(h, "abc")
+                local ok, res = pcall(function()
+                    if route == "method" then return h:seek(c[1], c[2]) end
+                    return fs.seek(h, c[1], c[2])
+                end)
+                local label = route .. " seek(" .. tostring(c[1]) .. ", " .. tostring(c[2]) .. ")"
+                T.ok(not ok or res == false, label .. " was not refused")
+                T.eq(fs.tell(h), 3, label .. " moved the position")
+                fs.write(h, "Z")
+                fs.close(h)
+                T.eq(F.files[DATA .. "/g.txt"], "abcZ", label .. " grew the file")
+            end
+        end
+        -- a numeric string inside the file is accepted, as an integer
+        local r, F = mk()
+        local fs = r.env.picocalc.fs
+        local h = fs.open("g.txt", "w")
+        fs.write(h, "abcdef")
+        T.eq(h:seek("1"), true)
+        T.eq(h:tell(), 1)
+        T.eq(fs.seek(h, " 0x2 ", "set"), true)
+        T.eq(math.type(fs.tell(h)), "integer")
+        T.eq(fs.tell(h), 2)
+        T.eq(fs.seek(h, "-1", "end"), true)
+        T.eq(fs.tell(h), 5)
+        fs.write(h, "Z")
+        fs.close(h)
+        T.eq(F.files[DATA .. "/g.txt"], "abcdeZ")
+        -- the real seek receives the normalised integer and a valid whence,
+        -- and is never reached with a bad whence
+        local got = {}
+        local realSeek = F.pc.fs.seek
+        F.pc.fs.seek = function(hh, off, wh)
+            got[#got + 1] = { off = off, wh = wh }
+            return realSeek(hh, off, wh)
+        end
+        local h3 = fs.open("g3.txt", "w")
+        fs.write(h3, "abcdef")
+        h3:seek("2")
+        fs.seek(h3, 3.0, "set")
+        h3:seek(" 0x1 ", "cur")
+        T.eq(#got, 3)
+        for _, g in ipairs(got) do
+            T.eq(math.type(g.off), "integer", "real seek got a non-integer offset")
+            T.ok(g.wh == "set" or g.wh == "cur" or g.wh == "end", "real seek got whence " .. tostring(g.wh))
+        end
+        T.eq(got[1].wh, "set", "nil whence normalised to set")
+        local before = #got
+        pcall(h3.seek, h3, 0, "bogus")
+        pcall(fs.seek, h3, 0, 1)
+        T.eq(#got, before, "a bad whence reached the real seek")
+        fs.close(h3)
+        F.pc.fs.seek = realSeek
+        -- fsize not returning an integer (the firmware's nil past 2 GB): refuse
+        local r2, F2 = mk()
+        local fs2 = r2.env.picocalc.fs
+        local h2 = fs2.open("g.txt", "w")
+        fs2.write(h2, "abc")
+        F2.pc.fs.failFsize = true
+        T.eq(h2:seek(0, "set"), false, "method seek with fsize nil")
+        T.eq(fs2.seek(h2, 50, "set"), false, "module seek with fsize nil")
+        T.eq(fs2.seek(h2, "50"), false, "string seek with fsize nil")
+        F2.pc.fs.failFsize = false
+        fs2.write(h2, "Z")
+        fs2.close(h2)
+        T.eq(F2.files[DATA .. "/g.txt"], "abcZ")
     end,
 
     check_path = function()
@@ -606,8 +702,12 @@ return {
         pd.unloadFont(other)
         T.ok(F.fontFiles[other], "a font the program did not load was unloaded")
         T.ok(contains(r.tracked.font, mine), "tracking lost")
-        pd.unloadFont(mine)
-        T.eq(F.fontFiles[mine], nil, "program font kept")
+        -- ids are read as integers, as the firmware does: a string id of a
+        -- chat font is still refused, and the program's own one unloads
+        pd.unloadFont(tostring(sans))
+        T.ok(F.fontFiles[sans], "chat font unloaded by a string id")
+        pd.unloadFont(tostring(mine))
+        T.eq(F.fontFiles[mine], nil, "program font kept (string id)")
         T.ok(not contains(r.tracked.font, mine), "unloaded font still tracked")
         local id, err = pd.loadFont("/apps/llmchat/fonts/sans.pfn")
         T.eq(id, nil); T.eq(err, "access denied")
