@@ -92,7 +92,13 @@ end
 
 function S:enter(arg)
     local chat = self.chat
-    if arg and (arg.open or arg.new) then
+    if arg and arg.open and arg.open == chat.id then
+        -- the chat that is open (a reply may be arriving in it): carry on
+        self.follow = true
+    elseif arg and (arg.open or arg.new) then
+        -- A reply arriving here is stopped properly first, as F2 does: its
+        -- partial text, the "Reply stopped" note and the message are saved.
+        if chat.state ~= "idle" then chat:stop() end
         self:saveDraft()
         if arg.open then chat:open(arg.open) else chat:open(nil) end
         self:loadDraft()

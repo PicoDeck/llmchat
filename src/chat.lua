@@ -228,6 +228,10 @@ function Chat:send(text)
     self.items[#self.items + 1] = { role = "user", text = text }
     self:_bump()
     self:_start()
+    -- On the card while its reply arrives (after the request is on its way,
+    -- so the save adds no wait before the first words): a reply that never
+    -- finishes doesn't take the question with it.
+    if self.state ~= "idle" then self:_persist() end
     return true
 end
 

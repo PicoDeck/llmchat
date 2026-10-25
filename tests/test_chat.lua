@@ -125,6 +125,24 @@ return {
         T.eq(#store:chats(), 1)
     end,
 
+    -- Final review I1: the message is on the card while its reply arrives,
+    -- so a reply that never finishes (the app closed by Exit App, a power
+    -- cut) does not take the question with it.
+    send_saves_the_message = function()
+        local F, chat, store = setup({ responder = routing("claude-text.sse") })
+        chat:open(nil)
+        T.eq(chat:send("keep me"), true)
+        T.ok(chat.id, "the chat has an id at once")
+        local saved = store:loadChat(chat.id)
+        T.ok(saved, "the chat is saved")
+        T.eq(#saved.items, 1)
+        T.eq(saved.items[1].role, "user")
+        T.eq(saved.items[1].text, "keep me")
+        T.eq(#F.requests, 1, "the request went out first")
+        run(F, chat)
+        T.eq(#store:loadChat(chat.id).items, 2)
+    end,
+
     blank_and_double_send = function()
         local F, chat = setup({ responder = routing("claude-text.sse") })
         chat:open(nil)

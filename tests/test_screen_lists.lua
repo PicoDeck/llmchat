@@ -1,6 +1,7 @@
 local T = require("tests.t")
 local Fake = require("tests.fakepc")
 local Store = require("src.store")
+local Fixture = require("tests.fixture")
 
 local ID = "net.picodeck.llmchat"
 local D = "/data/" .. ID
@@ -34,6 +35,49 @@ end
 local function open(F, app, arg)
     app:go("lists", arg)
     app:frame()
+end
+
+-- Final review I1: a reply streaming in the open chat (the text fixture,
+-- 20 bytes a pass), once some of it has arrived.
+local QUESTION = "a long question I typed carefully"
+local function streaming(F, app)
+    F.responder = function(_, _, _, body)
+        if not body:find('"stream":true', 1, true) then return 200, {}, select(2, Fixture.read("claude-title.json")) end
+        return 200, {}, Fixture.chunks("claude-text.sse", 20)
+    end
+    F.type(QUESTION)
+    F.key("enter")
+    for _ = 1, 200 do
+        app:frame()
+        if app.chat.state == "streaming" and app.chat.live and #app.chat.live.text > 0 then return end
+    end
+    error("the reply never started")
+end
+
+-- The saved chat holding QUESTION, or nil.
+local function savedWithQuestion(F)
+    local st = Store.new(F.pc.fs, F.pc.json, D)
+    for _, row in ipairs(st:chats()) do
+        local c = st:loadChat(row.id)
+        for _, it in ipairs(c and c.items or {}) do
+            if it.role == "user" and it.text == QUESTION then return c end
+        end
+    end
+    return nil
+end
+
+-- The reply was stopped properly: the question, the partial reply (marked
+-- stopped) and the "Reply stopped" note are all on the card.
+local function keptAndStopped(F)
+    local c = savedWithQuestion(F)
+    T.ok(c, "the question was lost")
+    local reply, note
+    for _, it in ipairs(c.items) do
+        if it.role == "assistant" and it.stopped and it.text ~= "" then reply = true end
+        if it.role == "note" and it.text == "Reply stopped" then note = true end
+    end
+    T.ok(reply, "the partial reply was lost")
+    T.ok(note, "no Reply stopped note")
 end
 
 return {
@@ -221,6 +265,73 @@ return {
         T.eq(app.screenName, "chat")
         T.eq(app.chat.id, "a1")
     end,
+    open_another_chat_while_a_reply_arrives = function()
+        local F, app = setup({ seed = two })
+        app:go("chat", { new = true })
+        app:frame()
+        streaming(F, app)
+        F.key("f1"); app:frame()
+        T.eq(app.screenName, "lists")
+        -- the rows: the new chat (saved at send) first, then a1 and b2
+        local target
+        for i, r in ipairs(app.screen.rows[1]) do if r.id == "a1" then target = i end end
+        for _ = 2, target do F.key("down") end
+        F.key("enter"); app:frame()
+        T.eq(app.chat.id, "a1")
+        T.eq(app.chat.state, "idle")
+        keptAndStopped(F)
+    end,
+
+    new_chat_from_the_list_while_a_reply_arrives = function()
+        local F, app = setup({ seed = two })
+        app:go("chat", { new = true })
+        app:frame()
+        streaming(F, app)
+        F.key("f1"); app:frame()
+        F.key("f2"); app:frame()
+        T.eq(app.screenName, "chat")
+        T.eq(app.chat.id, nil, "a new chat")
+        keptAndStopped(F)
+    end,
+
+    programs_f4_while_a_reply_arrives = function()
+        local F, app = setup({ seed = two })
+        app:go("chat", { new = true })
+        app:frame()
+        streaming(F, app)
+        local list = app.programs.list
+        app.programs.list = function() return { { name = "dice.lua", chat = "Cups", chatId = "a1", size = 10, updated = F.epoch } } end
+        F.key("f1"); app:frame()
+        F.key("right"); app:frame()
+        F.key("f4"); app:frame()
+        app.programs.list = list
+        T.eq(app.chat.id, "a1")
+        keptAndStopped(F)
+    end,
+
+    -- Opening the chat whose reply is arriving carries on with it.
+    reopen_the_chat_whose_reply_arrives = function()
+        local F, app = setup({ seed = two })
+        app:go("chat", { open = "a1" })
+        app:frame()
+        streaming(F, app)
+        F.key("f1"); app:frame()
+        local target
+        for i, r in ipairs(app.screen.rows[1]) do if r.id == "a1" then target = i end end
+        for _ = 2, target do F.key("down") end
+        F.key("enter"); app:frame()
+        T.eq(app.chat.id, "a1")
+        T.ok(app.chat.state ~= "idle", "the reply was cut off")
+        for _ = 1, 400 do
+            app:frame()
+            if app.chat.state == "idle" then break end
+        end
+        local last = app.chat.items[#app.chat.items]
+        T.eq(last.role, "assistant")
+        T.ok(not last.stopped, "the reply was stopped")
+        T.ok(savedWithQuestion(F), "the question was saved")
+    end,
+
     programs_without_task_13_do_nothing = function()
         local F, app = setup()
         open(F, app, { tab = 2 })
