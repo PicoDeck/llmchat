@@ -73,15 +73,18 @@ Ask for one in plain words: "write a dice roller", "a program that shows a clock
 - A program runs on the whole screen. Esc usually ends it (that is up to the program), and you come back to the chat with a line such as "dice.lua ended after 12 s" ("stopped after" when you used Stop program). A program that calls `sys.exit()` also returns you to the chat.
 - **Stuck program:** open the system menu and choose **Stop program**. If the program is in a tight loop the menu can take several seconds to appear: wait about 5 s before choosing. A program that wraps its code in its own `pcall` can swallow the stop; **Exit App** in the same menu is the last resort, and loses nothing, as the chat is already saved.
 - **Crash:** the error screen shows the message, how long it ran and the last lines it printed. **Ask Claude to fix** (or OpenAI) sends the error to the model and saves the fixed program over the file (the old version is kept as `<name>.lua.prev`). F3 runs it again as it is. A program whose chat was deleted can still be run; fixing it starts a new chat.
-- Each program has its own folder, `programs/<name>.data/`, for the files and settings it saves.
+- Each program has its own folder, `programs/<name>.data/`, for the files and settings it saves. Deleting a program (Del in the Programs tab) deletes that folder too, and its saved data with it.
 
 ### What the sandbox does and doesn't do
-A program is a fence, not a wall. It is meant to keep a well-meaning but buggy program from harming the chat, not to contain a hostile one.
-- **Kept out:** a program cannot read or write the chat's files or `keys.txt`. Its files live only in its own folder. It gets its own copies of the standard libraries, and cannot reach the chat's globals. After every run the app closes the fonts, files, connections and menu items the program opened. The chat only accepts a local test server in place of the real API address, so a key can't be redirected elsewhere.
-- **Not kept out:** a program shares the chat's memory, so a greedy one can use it all. It can draw over the screen, play sound, and use the network, since the app has the `http` permission. A program written to catch errors can ignore "Stop program".
-- Only run programs you are happy to run. Reading the code first is a good habit.
+A program runs inside the chat app, so the app fences it in. The fence is built to hold against any program, a hostile one included: a program must not be able to read your API keys or your chats, and must not take the app down.
+- **Kept out:** a program cannot read or write the chat's files or `keys.txt`; its files live only in its own folder. It gets its own copies of the standard libraries, and cannot reach the chat's globals or the real `sys.exit`. The screen is cleared before it starts, so it can't read the chat's last frame. The moment it ends, everything it could call stops working, and none of its code runs again: its menu items and its network and sound callbacks are cut off, and the app closes the fonts, files, connections and players it opened. The chat only accepts a local test server in place of the real API address, so a key can't be redirected elsewhere.
+- **Not kept out** (the fence's known limits):
+  - A program shares the chat's memory, so a greedy one can use it all (the run then ends with "not enough memory").
+  - While it runs, it can draw over the screen, play sound, and use the network, since the app has the `http` permission.
+  - A program written to catch errors with its own `pcall` can ignore "Stop program". **Exit App** in the system menu is the fallback.
+- Reading a program before you run it is still a good habit.
 
-A stronger wall would need firmware support (running a program as its own app); that is not built.
+A stronger wall would need firmware support (running a program as its own app, in its own Lua state); that is not built.
 
 ## Credits
 The Sans reading font is converted from X.Org's Adobe bitmap fonts; [fonts/LICENSE](fonts/LICENSE) has the licence.
@@ -92,4 +95,4 @@ The Sans reading font is converted from X.Org's Adobe bitmap fonts; [fonts/LICEN
 - `make e2e`: smoke tests in the PicoDeck simulator against a fake API server on `127.0.0.1` (the app reaches it through hidden `claude_base` / `openai_base` overrides in `prefs.json`). They need a PicoDeck checkout (`PICODECK_ROOT`, default `~/Projects/PicoDeck/picodeck`); run `make simulator` there first.
 - [docs/device-checklist.md](docs/device-checklist.md): the checks to run on a real PicoCalc before a release.
 - `tools/make_icon.py` redraws `icon.png`; `tools/record_stream.py` records real API streams for test fixtures.
-- Releases: bump `version` in `app.json`, then tag `v<version>`. CI builds the store ZIP, `picodeck-llmchat-<version>.zip`.
+- Releases: bump `version` in `app.json`, then tag `v<version>`. CI builds the store ZIP, `picodeck-llmchat-v<version>.zip` (named after the tag).

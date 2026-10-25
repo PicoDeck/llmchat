@@ -94,7 +94,8 @@ end
 function S:deleteProgram(row)
     local app = self.app
     if not (app.programs and app.programs.delete) then return end
-    if not app.pc.ui.confirm("Delete this program?") then return end
+    -- ruling R21: Programs:delete removes its data folder too
+    if not app.pc.ui.confirm("Delete this program and its saved data?") then return end
     app.programs:delete(row.name)
     self:load()
 end

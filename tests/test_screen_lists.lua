@@ -249,7 +249,7 @@ return {
         T.eq(ran, "dice.lua")
         F.confirms = { false }
         F.key("del"); app:frame()
-        T.eq(F.lastConfirm, "Delete this program?")
+        T.eq(F.lastConfirm, "Delete this program and its saved data?") -- R21: its data folder goes too (M4)
         T.eq(deleted, nil)
         F.confirms = { true }
         F.key("del"); app:frame()
