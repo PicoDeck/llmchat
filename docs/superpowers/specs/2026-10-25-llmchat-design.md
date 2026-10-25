@@ -472,6 +472,7 @@ Overrides:
 - **The chat's globals and modules:** a separate `env`, a `load` that defaults to it, no `require`, and copied library tables.
 - **Redirecting the chat's next request:** the hidden base overrides (5.4) accept only `http://127.0.0.1:<port>` or `http://localhost:<port>`, so even a tampered `prefs.json` can't send a key to another machine.
 - **A request in flight:** a program can't run while a reply is arriving (9.2).
+- **Program code after the run** (final review C1): a run-over gate closes the moment the program is over. From then on every function the program could hold does nothing (every `picocalc` function, pass-throughs included, `print`, the sandbox's own functions and every proxy method), and every function it handed to the firmware (menu items, HTTP, TCP and player callbacks) runs none of its code. HTTP connections, TCP sockets and the framebuffer handle are proxies for this. So a callback that fires after the run can't read the screen or the keyboard, or send anything.
 
 ### 9.4 Cleanup after every run
 The firmware's launcher resets a list of things between apps (`src/os/CLAUDE.md`, "Exit teardown"). A program never exits the app, so the runner does the Lua-visible equivalent itself:
