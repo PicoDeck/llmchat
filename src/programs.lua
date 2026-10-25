@@ -141,11 +141,10 @@ end
 
 function Programs:delete(name)
     if not validName(name) then return nil end
-    local idx = self:_index()
-    local fs = self.store.fs
-    pcall(fs.delete, self.store:path("programs/" .. name))
-    pcall(fs.delete, self.store:path("programs/" .. name .. ".prev"))
-    if fs.deleteRecursive then pcall(fs.deleteRecursive, self:dataDir(name)) end
+    local idx, store = self:_index(), self.store
+    store:remove(store:path("programs/" .. name))
+    store:remove(store:path("programs/" .. name .. ".prev"))
+    store:remove(self:dataDir(name), true)
     if idx[name] then
         idx[name] = nil
         return self:_flush()

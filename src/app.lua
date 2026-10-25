@@ -15,6 +15,7 @@ local Prompt = require("src.prompt")
 local Fonts = require("src.fonts")
 local Theme = require("src.theme")
 local Sandbox = require("src.sandbox")
+local Http = require("src.http")
 
 local App = {}
 App.__index = App
@@ -32,6 +33,8 @@ function App.new(pc, appId, appDir)
     self.W = require("src.widgets")
     self.theme = Theme.new(pc.display)
     self.store = Store.new(pc.fs, pc.json, "/data/" .. appId)
+    -- The store writes in slow mode while a request is on the air (S1).
+    self.store.radioBusy = function() return Http.inFlight(pc.network) end
     -- spec 8.4: the old app's key, imported once before any key is read
     if pc.config then self.store:importOld(pc.config) end
     local prefs = self.store:prefs()

@@ -1,5 +1,7 @@
 -- Everything the app keeps on the SD card (spec section 8).
--- fs and json are injected (picocalc.fs / picocalc.json, or fakes in tests).
+-- fs and json are injected (picocalc.fs / picocalc.json, or fakes in tests),
+-- and so is store.radioBusy: a function, true while an HTTP request is in
+-- flight (the app sets it; nil means never), which onCard reads.
 local Store = {}
 Store.__index = Store
 
@@ -25,11 +27,42 @@ function Store:path(rel) return self.dir .. "/" .. rel end
 
 -- ---------------------------------------------------------------- raw files
 
+-- Every change the app makes to the card goes through onCard: the safe save
+-- (writeText, so every file: chats and their index, prefs, keys, programs and
+-- theirs), deletes (remove), the renames that finish a cut save or set a
+-- corrupt file aside, and the old app's config save. While a request is in
+-- flight (radioBusy), the WiFi radio's EMI corrupts SD writes at the full
+-- 25 MHz (picodeck src/drivers/sdcard.h), so fn runs with the bus in slow
+-- mode (1 MHz, as the store and the download library do around their
+-- transfers): its writes, and the deletes and renames that write the FAT and
+-- directory too. Slow mode is off again on every path; an error then goes
+-- on as it was. A nested call runs inside the outer one's slow mode.
+function Store:onCard(fn, ...)
+    local fs = self.fs
+    if self.slowing or type(fs.setSlowMode) ~= "function" or not (self.radioBusy and self.radioBusy()) then
+        return fn(...)
+    end
+    self.slowing = true
+    pcall(fs.setSlowMode, true)
+    local r = table.pack(pcall(fn, ...))
+    pcall(fs.setSlowMode, false)
+    self.slowing = false
+    if not r[1] then error(r[2], 0) end
+    return table.unpack(r, 2, r.n)
+end
+
+-- Deletes a file, or with `recursive` a folder and all in it, on the card.
+-- Quiet: a file that isn't there, or a refused delete, is not an error.
+function Store:remove(p, recursive)
+    local f = recursive and self.fs.deleteRecursive or self.fs.delete
+    if type(f) == "function" then self:onCard(pcall, f, p) end
+end
+
 local function parentOf(p) return p:match("^(.*)/[^/]*$") end
 
 -- Safe save: write <p>.tmp, delete <p>, rename. Returns true | nil, err.
 -- Any failure before the delete leaves the old file untouched.
-function Store:writeText(rel, text)
+local function safeSave(self, rel, text)
     local fs = self.fs
     local p = self:path(rel)
     fs.mkdir(self.dir)
@@ -59,6 +92,10 @@ function Store:writeText(rel, text)
     return true
 end
 
+function Store:writeText(rel, text)
+    return self:onCard(safeSave, self, rel, text)
+end
+
 local function setAside(fs, p)
     pcall(fs.delete, p .. ".bad")
     if not fs.rename(p, p .. ".bad") then pcall(fs.delete, p) end
@@ -84,7 +121,7 @@ end
 -- Plain text read with .tmp recovery (finishes the rename).
 function Store:readText(rel)
     local text, src, fromTmp = self:locate(rel)
-    if text and fromTmp then self.fs.rename(src, self:path(rel)) end
+    if text and fromTmp then self:onCard(self.fs.rename, src, self:path(rel)) end
     return text
 end
 
@@ -94,10 +131,10 @@ function Store:readJSON(rel)
     if text == nil then return nil end
     local ok, v = pcall(json.decode, text)
     if not ok or v == nil or json.isNull and json.isNull(v) then
-        setAside(fs, src)
+        self:onCard(setAside, fs, src)
         return nil
     end
-    if fromTmp then fs.rename(src, self:path(rel)) end
+    if fromTmp then self:onCard(fs.rename, src, self:path(rel)) end
     return v
 end
 
@@ -202,7 +239,7 @@ function Store:importOld(config)
     end
     config.set("llmchat_api_key", nil)
     config.set("llmchat_provider", nil)
-    config.save()
+    self:onCard(config.save)
     return imported
 end
 
@@ -277,7 +314,7 @@ function Store:saveChat(chat)
     local wok, werr = self:writeJSON("chats/index.json", new)
     if not wok then return nil, werr end
     self._index = new
-    for _, id in ipairs(removed) do pcall(self.fs.delete, self:path("chats/" .. id .. ".json")) end
+    for _, id in ipairs(removed) do self:remove(self:path("chats/" .. id .. ".json")) end
     return true, removed
 end
 
@@ -292,7 +329,7 @@ function Store:deleteChat(id)
         if not ok then return nil, err end
         self._index = new
     end
-    pcall(self.fs.delete, self:path("chats/" .. id .. ".json"))
+    self:remove(self:path("chats/" .. id .. ".json"))
     return true
 end
 

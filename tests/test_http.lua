@@ -165,4 +165,31 @@ return {
         T.eq(req.state, "failed")
         T.ok(req.err)
     end,
+
+    -- S1: a request is in flight from post until its connection is released
+    -- (finished, cancelled, failed or closed by the firmware), counted per
+    -- network module: the app's "radio busy" check.
+    in_flight_until_released = function()
+        local F = setup(function() return 200, {}, { "a", "b" } end)
+        local net = F.pc.network
+        T.eq(Http.inFlight(net), false, "nothing sent yet")
+        local req = Http.post(net, BASE, "/p", {}, "")
+        T.eq(Http.inFlight(net), true, "sent")
+        T.eq(Http.inFlight(Fake.new().pc.network), false, "another network module")
+        drain(F, req)
+        T.eq(req.state, "done")
+        T.eq(Http.inFlight(net), false, "done")
+        Http.post(net, BASE, "/p", {}, ""):cancel()
+        T.eq(Http.inFlight(net), false, "cancelled")
+        F.postError = "http: connection is closed"
+        Http.post(net, BASE, "/p", {}, "")
+        T.eq(Http.inFlight(net), false, "post failed")
+        F.postError = nil
+        F.responder = function() return nil, "connection reset" end
+        local lost = Http.post(net, BASE, "/p", {}, "")
+        drain(F, lost)
+        T.eq(lost.state, "failed")
+        T.eq(Http.inFlight(net), false, "closed by the firmware")
+        T.eq(Http.inFlight(nil), false)
+    end,
 }

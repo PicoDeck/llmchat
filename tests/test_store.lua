@@ -1,7 +1,9 @@
 local T = require("tests.t")
 local fakes = require("tests.fakes")
+local Fake = require("tests.fakepc")
 local json = require("tests.json")
 local Store = require("src.store")
+local Programs = require("src.programs")
 
 local D = "/data/net.picodeck.llmchat"
 
@@ -13,6 +15,50 @@ end
 local function chat(id, updated)
     return { v = 1, id = id, title = "T" .. id, created = updated, updated = updated,
              items = { { role = "user", text = "hi" } } }
+end
+
+-- S1: a Store on the fake firmware (F.slowMode, F.slowWrites), with its
+-- radioBusy check answering `busy`, and every call that changes the card
+-- recorded with whether the bus was in slow mode at the time.
+local CHANGES = { "open", "write", "close", "delete", "deleteRecursive", "rename", "mkdir" }
+local function onCard(busy)
+    local F = Fake.new()
+    local seen = {}
+    for _, name in ipairs(CHANGES) do
+        local f = F.pc.fs[name]
+        F.pc.fs[name] = function(...)
+            seen[#seen + 1] = { call = name, slow = F.slowMode }
+            return f(...)
+        end
+    end
+    local s = Store.new(F.pc.fs, json, D)
+    s.radioBusy = function() return busy end
+    return s, F, seen
+end
+
+-- Every way the app changes the card: prefs, keys, chats and the index
+-- (with the cap's deletes), a chat's delete, a corrupt file set aside, a
+-- save cut before its rename finished on read, the old key's import, and
+-- programs (saved over with .prev, adopted, orphaned, deleted with data).
+local function everyWrite(s, F)
+    s:savePrefs()
+    s:setKey("claude", "sk-ant-test")
+    for i = 1, Store.CAP + 1 do assert(s:saveChat(chat("c" .. i, i))) end
+    assert(s:deleteChat("c51"))
+    F.files[D .. "/chats/bad.json"] = "{not json"
+    s:loadChat("bad")
+    F.files[D .. "/notes.txt.tmp"] = "cut"
+    assert(s:readText("notes.txt") == "cut")
+    local cfg = { llmchat_provider = "1", llmchat_api_key = "sk-old" }
+    s:importOld({ get = function(k) return cfg[k] end, set = function(k, v) cfg[k] = v end,
+                  save = function() F.pc.fs.mkdir(D .. "/config"); return true end })
+    local progs = Programs.new(s)
+    assert(progs:save("c2", { { name = "dice.lua", code = "-- dice.lua\n" } })[1] == "dice.lua")
+    assert(progs:save("c2", { { name = "dice.lua", code = "-- dice.lua\nx = 1\n" } })[1] == "dice.lua")
+    assert(progs:adopt("dice.lua", "c3"))
+    assert(progs:orphan("c3"))
+    F.files[progs:dataDir("dice.lua") .. "/save.json"] = "{}"
+    progs:delete("dice.lua")
 end
 
 return {
@@ -239,5 +285,58 @@ return {
         local id = s:newId({ synced = true, year = 2026, month = 10, day = 25,
                              hour = 14, min = 2, sec = 12, epoch = 1792936932 })
         T.eq(id, "20261025-140212-1")
+    end,
+
+    -- S1: while a request is in flight, the radio's EMI corrupts SD writes at
+    -- full speed (picodeck sdcard.h), so every change the app makes to the
+    -- card (the writes, and the deletes and renames that write the FAT and
+    -- directory) runs with the bus in slow mode, which is off again after.
+    every_write_slow_while_a_request_is_in_flight = function()
+        local s, F, seen = onCard(true)
+        everyWrite(s, F)
+        T.ok(#seen > 100, "only " .. #seen .. " changes recorded")
+        local kinds = {}
+        for _, c in ipairs(seen) do
+            kinds[c.call] = true
+            T.ok(c.slow, c.call .. " at full speed with a request in flight")
+        end
+        for _, k in ipairs(CHANGES) do T.ok(kinds[k], "never seen: " .. k) end
+        T.ok(F.slowWrites > 0)
+        T.eq(F.slowMode, false, "left in slow mode")
+    end,
+
+    -- With nothing in flight the bus is left at full speed.
+    writes_full_speed_with_nothing_in_flight = function()
+        local s, F, seen = onCard(false)
+        everyWrite(s, F)
+        for _, c in ipairs(seen) do T.ok(not c.slow, c.call .. " in slow mode") end
+        T.eq(F.slowWrites, 0)
+        local plain = Store.new(F.pc.fs, json, D) -- no radioBusy check: never busy
+        T.ok(plain:writeText("x.txt", "x"))
+        T.eq(F.slowWrites, 0)
+    end,
+
+    -- Slow mode is off again after a write that fails or raises, and the
+    -- error goes on as it was.
+    slow_mode_off_after_a_failed_write = function()
+        local s, F = onCard(true)
+        F.pc.fs.failOpen = true
+        T.eq(s:writeText("a.txt", "x"), nil)
+        T.eq(F.slowMode, false, "after a failed open")
+        F.pc.fs.failOpen = false
+        F.pc.fs.failWrite = true
+        T.eq(s:writeText("a.txt", "x"), nil)
+        T.eq(F.slowMode, false, "after a failed write")
+        F.pc.fs.failWrite = false
+        F.pc.fs.rename = function() error("not enough memory", 0) end
+        local ok, err = pcall(s.writeText, s, "a.txt", "x")
+        T.eq(ok, false)
+        T.eq(err, "not enough memory")
+        T.eq(F.slowMode, false, "after a write that raised")
+        local exit = {} -- the firmware's exit is not a string
+        F.pc.fs.open = function() error(exit) end
+        ok, err = pcall(s.savePrefs, s)
+        T.ok(rawequal(err, exit), "the error changed on the way")
+        T.eq(F.slowMode, false, "after an open that raised")
     end,
 }

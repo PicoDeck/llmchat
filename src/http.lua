@@ -26,6 +26,25 @@ end
 local Req = {}
 Req.__index = Req
 
+-- Requests that may still hold a connection, and the network module each
+-- was made on (weak keys: a request nobody keeps goes when it is collected).
+local live = setmetatable({}, { __mode = "k" })
+
+-- True while a request made on `net` is in flight: from post until its
+-- connection is released (it finished, failed, was cancelled, or the
+-- firmware closed it). The app's "radio busy" check for its card writes
+-- (Store.radioBusy).
+function M.inFlight(net)
+    for req, n in pairs(live) do
+        if req.conn == nil then
+            live[req] = nil
+        elseif n == net then
+            return true
+        end
+    end
+    return false
+end
+
 local function detach(c)
     pcall(c.setRequestCallback, c, nil)
     pcall(c.setRequestCompleteCallback, c, nil)
@@ -98,6 +117,7 @@ function M.post(net, base, path, headers, body)
         return req
     end
     req.conn = conn
+    live[req] = net
     conn:setConnectTimeout(M.CONNECT_S)
     conn:setReadTimeout(M.READ_S)
     conn:setReadBufferSize(M.BUFFER)

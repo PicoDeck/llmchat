@@ -419,6 +419,26 @@ return {
         T.ok(rawequal(err, exit), "the exit was swallowed")
     end,
 
+    -- S1: the save at send happens with the request already on its way, so
+    -- the app's store writes it in slow mode; the save once the reply is in
+    -- (its request closed) runs at full speed, and the bus ends at full speed.
+    send_save_in_slow_mode = function()
+        local F, app = setup()
+        local writes = {}
+        local write = F.pc.fs.write
+        F.pc.fs.write = function(h, s)
+            if h.path:find("/chats/", 1, true) and not h.path:find("index", 1, true) then
+                writes[#writes + 1] = F.slowMode
+            end
+            return write(h, s)
+        end
+        sendText(F, app, "hello")
+        T.same(writes, { true }, "the save at send")
+        T.ok(waitFor(app, function() return app.chat.state == "idle" end), "the reply finished")
+        T.eq(writes[2], false, "the save once the reply is in")
+        T.eq(F.slowMode, false, "left in slow mode")
+    end,
+
     -- The report is guarded too: an error raised while the frame reports
     -- another (out of memory while it builds the text, here from the
     -- cleanText that errorLine calls) doesn't end the app either, and the
