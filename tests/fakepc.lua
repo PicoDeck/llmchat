@@ -25,6 +25,18 @@ function M.new()
     }
     local fs, files = fakes.fs()
     F.files = files
+    -- The files directly inside `p` (directories are not modelled).
+    function fs.listDir(p)
+        local out = {}
+        for path, text in pairs(files) do
+            local name = path:sub(1, #p + 1) == p .. "/" and path:sub(#p + 2)
+            if name and name ~= "" and not name:find("/", 1, true) then
+                out[#out + 1] = { name = name, is_dir = false, size = #text }
+            end
+        end
+        table.sort(out, function(a, b) return a.name < b.name end)
+        return out
+    end
     F.responder = function() return 404, {}, "no responder" end
 
     -- One firmware service pass: starts pending requests and delivers the
@@ -147,6 +159,9 @@ function M.new()
     function sys.getClock() return { synced = F.clockSynced, epoch = F.clockSynced and F.epoch or 0, hour = 0, min = 0, sec = 0 } end
     function sys.sleep(ms) F.ms = F.ms + ms; F.service() end
     function sys.addMenuItem(label, fn) F.menu[label] = fn end
+    function sys.clearMenuItems()
+        for k in pairs(F.menu) do F.menu[k] = nil end
+    end
 
     -- picocalc.network.http. A request goes to F.responder(method, path,
     -- headers, body) at the next F.service(), which returns
@@ -229,6 +244,7 @@ function M.new()
     F.pc = {
         display = display, ui = ui, input = input, sys = sys, network = network,
         fs = fs, json = require("tests.json"), config = config,
+        appconfig = config, -- the firmware registers the one store under both names
     }
 
     function F.key(name, mods)
