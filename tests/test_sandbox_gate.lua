@@ -479,6 +479,9 @@ return {
     -- Stop raises until the run's xpcall returns: chosen unprotected, as the
     -- firmware runs it, at any one of the runner's instructions once the gate
     -- is closed, it never raises out of execute and never changes the outcome.
+    -- (This would still pass without Stop's run.unwound check: shut clears
+    -- the menu inside runThenShut, so a Stop after xpcall raises at most into
+    -- execute's pcall, which keeps the outcome. The check is belt and braces.)
     stop_after_the_gate_stays_in_the_run = function()
         for src, want in pairs({ ["return 1"] = "ended", ["error('boom')"] = "error",
                                  ["picocalc.sys.exit()"] = "exit" }) do
@@ -514,7 +517,7 @@ return {
         for _, ending in ipairs({ "error('boom')", "LOOPING('main'); while true do end" }) do
             local F = Fake.new()
             local run = Sandbox.newRun(F.pc, context())
-            local looping, tries, guarded = nil, {}, nil
+            local looping, tries, guarded, stopFn = nil, {}, nil, nil
             run.env.LOOPING = function(where) looping = where end
             debug.sethook(function()
                 local where = looping
@@ -526,6 +529,7 @@ return {
                 end
                 local stop = F.menu["Stop program"]
                 if stop then
+                    stopFn = stop
                     looping = nil
                     stop() -- raises into the loop, as from the firmware's hook
                     looping = where
@@ -549,7 +553,9 @@ return {
                 T.eq(r.status, "stopped", r.err)
             end
             T.ok(not F.hasLog("in close"), ending .. ": the close handler reached the firmware")
-            T.ok(pcall(F.menu["Stop program"] or function() end), "Stop raises after the run")
+            -- the callback itself: cleanup has emptied F.menu by now
+            T.ok(stopFn, ending .. ": Stop was never chosen")
+            T.ok(pcall(stopFn), ending .. ": Stop raises after the run")
         end
     end,
 

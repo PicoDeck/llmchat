@@ -483,7 +483,6 @@ return {
         end
     end,
 
-    -- The backstop: the five real library tables are put back as they were.
     -- Spec 9.3: picodeck's download library works inside a program (skipped
     -- without PICODECK_ROOT). It writes under fs.setSlowMode(true), as the
     -- radio's EMI corrupts SD writes at full speed, and it can write only
@@ -546,6 +545,7 @@ return {
         T.eq(F.openHandles(), 0, "the partial file is still open")
     end,
 
+    -- The backstop: the five real library tables are put back as they were.
     libraries_restored = function()
         local F = Fake.new()
         local rep, sin = string.rep, math.sin
