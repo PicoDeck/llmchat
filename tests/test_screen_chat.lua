@@ -350,4 +350,51 @@ return {
         -- the whole text each time would be about bumps * #text / 2 characters
         T.ok(parsed < 4 * #text, "parsed " .. parsed .. " characters for a " .. #text .. " byte reply")
     end,
+    -- Final review M7: an unexpected error in a frame (a bug, a memory
+    -- error) is logged and shown, and the app keeps running with the reply
+    -- that is arriving and the draft; no key reaches the log or the toast.
+    frame_error_contained = function()
+        local F, app, S = setup()
+        sendText(F, app, "hello")
+        T.ok(app.chat.state ~= "idle", "a reply is arriving")
+        F.type("my draft")
+        frames(app, 1)
+        local draw, failed = S.draw, 0
+        S.draw = function(self, ...)
+            if failed < 3 then
+                failed = failed + 1
+                error("src/screens/chat.lua:1: boom with key sk-ant-secret-1234\201")
+            end
+            return draw(self, ...)
+        end
+        app.dirty = true
+        local ok, err = pcall(frames, app, 3)
+        T.ok(ok, "the error escaped: " .. tostring(err))
+        T.eq(app.running, true)
+        T.ok(F.hasLog("[app] error: "), "logged")
+        T.ok(F.hasToast("Something went wrong"), "shown")
+        for _, l in ipairs(F.logs) do T.ok(not l:find("secret", 1, true), "the key was logged: " .. l) end
+        for _, t in ipairs(F.toasts) do
+            T.ok(not t:find("secret", 1, true), "the key was shown")
+            T.ok(not t:find("[^\32-\126]"), "not printable ASCII: " .. t)
+        end
+        local n = 0
+        for _, l in ipairs(F.logs) do if l:find("[app] error: ", 1, true) then n = n + 1 end end
+        T.eq(n, 1, "the same error is reported once")
+        T.eq(F.font, F.pc.display.FONT_6X8, "6x8 back for the firmware's UI")
+        T.ok(waitFor(app, function() return app.chat.state == "idle" end), "the reply finished")
+        T.eq(app.chat.items[#app.chat.items].role, "assistant")
+        T.eq(S.ta:getText(), "my draft")
+    end,
+
+    -- The firmware's exit (a light userdata; here any value that is not a
+    -- string) goes on up, so Exit App still closes the app.
+    frame_lets_the_exit_through = function()
+        local F, app, S = setup()
+        local exit = {}
+        S.tick = function() error(exit) end
+        local ok, err = pcall(app.frame, app)
+        T.eq(ok, false)
+        T.ok(rawequal(err, exit), "the exit was swallowed")
+    end,
 }

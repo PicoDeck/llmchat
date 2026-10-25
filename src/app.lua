@@ -165,8 +165,39 @@ function App:runProgram(name, opts)
     return result
 end
 
--- One pass of the main loop.
+-- What an unexpected error says, safe to log and to draw: anything that
+-- looks like an API key is masked, then folded to one printable ASCII line.
+local function errorLine(err, max)
+    local s = err:gsub("sk%-[%w%-_]+", "sk-****")
+    return (Sandbox.cleanText(s, max):match("^[^\n]*"))
+end
+
+-- One pass of the main loop, guarded (final review M7): an unexpected error
+-- in it (a bug, a memory error) does not end the app, which would lose the
+-- reply that is arriving and the draft. It is logged and shown as a toast
+-- (the same message at most once every 5 s), the font is set back to 6x8 for
+-- the firmware's UI, and the loop goes on. A value that is not a string goes
+-- on up: that is the firmware's exit (Exit App, a light userdata), which is
+-- sticky and must close the app as the firmware intends.
 function App:frame()
+    local ok, err = pcall(self.step, self)
+    if ok then return end
+    if type(err) ~= "string" then error(err, 0) end
+    local pc = self.pc
+    pcall(pc.display.setFont, pc.display.FONT_6X8)
+    self.dirty = true
+    local okT, now = pcall(pc.sys.getTimeMs)
+    now = okT and tonumber(now) or 0
+    if err ~= self.lastError or now - (self.lastErrorAt or -1e9) >= 5000 then
+        self.lastError, self.lastErrorAt = err, now
+        pcall(pc.sys.log, "[app] error: " .. errorLine(err, 200))
+        pcall(pc.ui.toast, "Something went wrong: " .. errorLine(err, 60))
+    end
+    pcall(pc.sys.sleep, 10)
+end
+
+-- The frame itself (App:frame runs it guarded).
+function App:step()
     local pc = self.pc
     pc.input.update()
     while self.running do
