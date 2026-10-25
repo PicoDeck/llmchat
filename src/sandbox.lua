@@ -40,10 +40,22 @@
 --     anything with "..", "\", ":" or a control byte, or outside the folder,
 --     is denied). Built-in font names are the one non-path. The
 --     every_path_fn_checked test is generated from AUDIT.
+--   - File growth: fs.open hands out a File proxy, not the real handle, so
+--     neither fs.seek(h, ...) nor h:seek(...) can move a writable handle past
+--     the end of the file; FatFS would extend the chain over an uncleared gap
+--     (undefined bytes, possibly a deleted file's). Both go through one guard.
 --   - Objects: Sample/SamplePlayer/FilePlayer/MP3Player/ModPlayer/
 --     ZipArchive are proxies on every route that returns one (constructors,
 --     getSample, getSubsample, decompress, play, playAt), so no real one,
 --     with its unchecked load/save/extract, reaches the program.
+--   - Uncleared memory and storage the sandbox never reset: anything that
+--     hands the program a buffer or object still holding bytes the chat left.
+--     sys.qmiPsram* is denied (umm_malloc, never cleared). The back buffer
+--     still holds the chat's last frame at the start of a run, and
+--     display.getPixel/getBackBuffer read it: Task 15's execute clears both
+--     framebuffers before running the program (controller ruling R14). Image
+--     creation is safe: image.new, loadScaled, loadRegion, loadFromBuffer and
+--     the decoders all clear or fully fill the pixel buffer in the firmware.
 --   - Libraries: sys.loadlib reads only /system/lib/<name>.lua (name
 --     [%w_-]+, through ctx.readLib) and loads it into the program's env.
 --   - The app's globals and modules: a fresh env; load forces text and
@@ -84,7 +96,8 @@ Sandbox.RESETS = {
     background = "sys.resumeBackground()",
     clip = "display.clearClipRect()",
     font = "display.setFont(<the chat's font>)",
-    scroll = "display.setScrollOffset(0) (offset 0 maps rows 1:1 whatever the scroll area)",
+    scroll = "display.setScrollArea(0, 320, 160) and setScrollOffset(0): the full "
+        .. "default scroll area (spec 9.4), with the offset back to a 1:1 mapping",
     ["repeat"] = "input.setRepeat(200, 80), the firmware's defaults",
     transparent = "graphics.setTransparentColor(nil)",
     preload = "graphics.image.cancelPreload()",
@@ -371,6 +384,80 @@ local function gameSave(run)
     return s
 end
 
+-- fs file handles. open returns a File proxy (a table with a locked
+-- metatable) instead of the real handle, so a program cannot reach the real
+-- handle's seek through its metatable. On a writable handle, seek (by either
+-- fs.seek(h, ...) or h:seek(...)) refuses any position past the end of the
+-- file: FatFS extends a write handle's chain without clearing it, so the gap
+-- would hold bytes from deleted files, the chat's keys among them. The
+-- handle functions share the same code, since fs.read(h, n) and h:read(n)
+-- are one function in the firmware.
+local function fileSystem(run)
+    if run._files then return run._files end
+    local fs = run.pc.fs
+    local realOf = _setmetatable({}, { __mode = "k" })    -- proxy -> real handle
+    local writableOf = _setmetatable({}, { __mode = "k" }) -- proxy -> bool
+    local M = {}
+
+    local function real(h)
+        if h == nil then return nil end
+        local r = realOf[h]
+        if r ~= nil then return r end
+        return h
+    end
+
+    local function seek(h, offset, whence)
+        local r = real(h)
+        if writableOf[h] and _type(offset) == "number" then
+            local ok, size = _pcall(fs.fsize, r)
+            if ok and _type(size) == "number" then
+                local base = 0
+                if whence == "cur" then
+                    local okt, t = _pcall(fs.tell, r)
+                    base = (okt and _type(t) == "number") and t or 0
+                elseif whence == "end" then
+                    base = size
+                end
+                if base + offset > size then return false end
+            end
+        end
+        return fs.seek(r, offset, whence)
+    end
+
+    M.read = function(h, n) return fs.read(real(h), n) end
+    M.write = function(h, s) return fs.write(real(h), s) end
+    M.tell = function(h) return fs.tell(real(h)) end
+    M.fsize = function(h) return fs.fsize(real(h)) end
+    M.seek = seek
+    M.close = function(h)
+        if h == nil then return fs.close(nil) end
+        return fs.close(real(h))
+    end
+
+    -- The proxy's methods are the same functions (self is argument 1), so
+    -- h:read(n) and fs.read(h, n) behave identically, as in the firmware.
+    local meta = { __index = M, __metatable = false, __name = "file",
+                   __tostring = function() return "file" end,
+                   __close = function(self) M.close(self) end }
+
+    M.open = function(path, mode)
+        local abs = checkPath(run.dataDir, path)
+        if not abs then return nil, DENIED end
+        if mode == nil then mode = "r" end
+        if _type(mode) ~= "string" then return nil, DENIED end
+        local h, err = fs.open(abs, mode)
+        if not h then return nil, err end
+        addTracked(run, "file", h)
+        local p = _setmetatable({}, meta)
+        realOf[p] = h
+        writableOf[p] = mode:find("[wa+]") ~= nil
+        return p
+    end
+
+    run._files = M
+    return M
+end
+
 -- ------------------------------------------------------------ wraps
 
 -- WRAPS[name](run, real, entry, fname, O) -> the sandbox function, or nil
@@ -470,6 +557,14 @@ end
 
 function WRAPS.gameSave(run, _, _, fname)
     return gameSave(run)[fname]
+end
+
+function WRAPS.fsOpen(run)
+    return fileSystem(run).open
+end
+
+function WRAPS.fsFile(run, _, _, fname)
+    return fileSystem(run)[fname]
 end
 
 -- ------------------------------------------------------------ the program's picocalc

@@ -145,12 +145,24 @@ AUDIT.sys = {
     pioPsramRead = { deny = "raw mainboard PSRAM shared by every app and kept after the program; not needed" },
     pioPsramWrite = { deny = "raw mainboard PSRAM shared by every app and kept after the program; not needed" },
     pioPsramSize = { deny = "goes with pioPsramRead/Write, which programs do not get" },
-    qmiPsramAlloc = {}, qmiPsramFree = {}, qmiPsramWrite = {}, qmiPsramRead = {},
+    -- qmiPsramAlloc hands back an umm_malloc block on the shared Lua/PSRAM
+    -- heap and never clears it (only umm_calloc zeroes; the heap is cleared
+    -- once at boot), so a read can return bytes the chat freed earlier.
+    qmiPsramAlloc = { deny = "a raw PSRAM buffer that is not cleared, so it can hold bytes the chat freed (keys included)" },
+    qmiPsramRead = { deny = "reads a qmiPsram buffer, which programs do not get" },
+    qmiPsramWrite = { deny = "writes a qmiPsram buffer, which programs do not get" },
+    qmiPsramFree = { deny = "frees a qmiPsram buffer, which programs do not get" },
 }
 
+-- Handles are a proxy type (AUDIT.File), so neither fs.seek nor h:seek can
+-- grow a file past its end on a writable handle: FatFS extends the chain
+-- without clearing it, and the gap could hold bytes from deleted files, the
+-- chat's included. open hands out the proxy; the handle functions below
+-- unwrap it and share the seek guard with the File methods.
 AUDIT.fs = {
-    open = { path = { 1 }, track = "file" },
-    read = {}, write = {}, close = {}, seek = {}, tell = {}, fsize = {},
+    open = { path = { 1 }, wrap = "fsOpen", track = "file" },
+    read = { wrap = "fsFile" }, write = { wrap = "fsFile" }, close = { wrap = "fsFile" },
+    seek = { wrap = "fsFile" }, tell = { wrap = "fsFile" }, fsize = { wrap = "fsFile" },
     exists = { path = { 1 } },
     readFile = { path = { 1 } },
     size = { path = { 1 } },

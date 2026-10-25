@@ -25,6 +25,58 @@ function M.new()
     }
     local fs, files = fakes.fs()
     F.files = files
+    -- A seekable handle model, so the sandbox's file-handle proxy and its
+    -- seek guard can be tested. A handle holds a byte buffer and a position;
+    -- a write past the end leaves a gap of "?" (standing in for the uncleared
+    -- bytes FatFS would expose), which the seek guard must prevent. Modes:
+    -- "w" truncates, "a" appends, "r" reads an existing file.
+    local GAP = "?"
+    function fs.open(p, mode)
+        mode = mode or "r"
+        if fs.failOpen then return nil, "cannot open file" end
+        local writable = mode:find("[wa+]") ~= nil
+        local buf
+        if mode:find("w", 1, true) then
+            buf = ""
+        else
+            buf = files[p]
+            if buf == nil then return nil, "cannot open file" end
+        end
+        return { path = p, mode = mode, writable = writable, buf = buf,
+                 pos = mode:find("a", 1, true) and #buf or 0 }
+    end
+    function fs.write(h, s)
+        if fs.failWrite then return -1 end
+        s = tostring(s)
+        if h.pos > #h.buf then h.buf = h.buf .. GAP:rep(h.pos - #h.buf) end
+        h.buf = h.buf:sub(1, h.pos) .. s .. h.buf:sub(h.pos + #s + 1)
+        h.pos = h.pos + #s
+        return #s
+    end
+    function fs.read(h, n)
+        if h.pos >= #h.buf then return nil end
+        local s = h.buf:sub(h.pos + 1, h.pos + (n or #h.buf))
+        h.pos = h.pos + #s
+        return s
+    end
+    function fs.seek(h, offset, whence)
+        local base = 0
+        if whence == "cur" then base = h.pos elseif whence == "end" then base = #h.buf end
+        local target = base + offset
+        if target < 0 then return false end
+        h.pos = target
+        return true
+    end
+    function fs.tell(h) return h.pos end
+    function fs.fsize(h) return #h.buf end
+    function fs.close(h)
+        if h == nil then return end
+        if h.writable then
+            local text = h.buf
+            if fs.shortClose then text = text:sub(1, -2) end
+            files[h.path] = text
+        end
+    end
     -- The files directly inside `p` (directories are not modelled).
     function fs.listDir(p)
         local out = {}

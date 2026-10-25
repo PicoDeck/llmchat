@@ -267,6 +267,26 @@ return {
         T.eq(pc.sysconfig, nil)
     end,
 
+    -- The raw PSRAM buffer calls hand back an umm_malloc block the firmware
+    -- never clears, so a read could return bytes the chat freed. All four are
+    -- denied, present on the fake or not.
+    qmipsram_denied = function()
+        local F = Fake.new()
+        for _, n in ipairs({ "qmiPsramAlloc", "qmiPsramRead", "qmiPsramWrite", "qmiPsramFree" }) do
+            F.pc.sys[n] = function() return "stale heap bytes" end
+            T.ok(AUDIT.sys[n] and AUDIT.sys[n].deny, n .. " is not denied in AUDIT")
+        end
+        local pc = Sandbox.newRun(F.pc, context()).env.picocalc
+        T.eq(pc.sys.qmiPsramAlloc, nil)
+        T.eq(pc.sys.qmiPsramRead, nil)
+        T.eq(pc.sys.qmiPsramWrite, nil)
+        T.eq(pc.sys.qmiPsramFree, nil)
+        -- pioPsram* stay denied too
+        T.eq(pc.sys.pioPsramRead, nil)
+        T.eq(pc.sys.pioPsramWrite, nil)
+        T.eq(pc.sys.pioPsramSize, nil)
+    end,
+
     exit_raises_stop = function()
         local r = mk()
         local ok, e = pcall(r.env.picocalc.sys.exit)
@@ -285,11 +305,17 @@ return {
         local fs = r.env.picocalc.fs
         local h = fs.open("save.txt", "w")
         T.ok(h)
-        T.eq(h.path, DATA .. "/save.txt")
+        -- the handle is a proxy with a locked metatable, not the real handle
+        T.eq(getmetatable(h), false, "handle is a proxy")
+        T.eq(h.path, nil, "proxy exposes no fields")
         fs.write(h, "hi")
         fs.close(h)
         T.eq(F.files[DATA .. "/save.txt"], "hi")
-        T.ok(contains(r.tracked.file, h), "handle tracked")
+        -- the real handle (not the proxy) is tracked for cleanup
+        T.ok(not contains(r.tracked.file, h), "the proxy is tracked instead of the real handle")
+        local n = 0
+        for _, v in pairs(r.tracked.file) do if v ~= nil then n = n + 1 end end
+        T.ok(n >= 1, "a handle was tracked")
         F.files[KEYS] = "claude=sk-secret"
         local v, err = fs.readFile(KEYS)
         T.eq(v, nil); T.eq(err, "access denied")
@@ -304,6 +330,43 @@ return {
         v, err = fs.appPath("../keys.txt")
         T.eq(v, nil); T.eq(err, "access denied")
         T.eq(fs.browse, nil)
+    end,
+
+    -- A writable handle must not be seekable past EOF, by either route:
+    -- otherwise a write there grows the file over an uncleared gap.
+    file_handle_seek_guarded = function()
+        local r, F = mk()
+        local fs = r.env.picocalc.fs
+        local h = fs.open("save.txt", "w")
+        T.eq(getmetatable(h), false, "handle is a proxy")
+        -- both h:seek and fs.seek refuse a position past the end, unmoved
+        T.eq(h:seek(50, "set"), false, "h:seek past EOF")
+        T.eq(h:tell(), 0, "position unmoved after refused h:seek")
+        T.eq(fs.seek(h, 50, "set"), false, "fs.seek past EOF")
+        T.eq(fs.seek(h, 10, "end"), false, "seek past end via end+offset")
+        T.eq(fs.seek(h, 1, "cur"), false, "seek past end via cur+offset")
+        T.eq(fs.tell(h), 0)
+        fs.write(h, "X")
+        fs.close(h)
+        T.eq(F.files[DATA .. "/save.txt"], "X", "no uncleared gap written")
+        T.ok(not F.files[DATA .. "/save.txt"]:find("?", 1, true), "a gap sentinel leaked")
+        -- a seek inside the file is allowed, by either route
+        local w = fs.open("s2.txt", "w")
+        fs.write(w, "abcdef")
+        T.eq(w:seek(0, "set"), true)
+        T.eq(w:tell(), 0)
+        T.eq(fs.seek(w, 3, "set"), true)
+        fs.write(w, "Z")
+        fs.close(w)
+        T.eq(F.files[DATA .. "/s2.txt"], "abcZef")
+        -- a read handle may seek anywhere (firmware clamps; no write, no gap)
+        local rd = fs.open("save.txt", "r")
+        T.ok(rd)
+        T.eq(rd:seek(100, "set"), true, "read handle seek allowed")
+        T.eq(rd:read(1), nil)
+        fs.close(rd)
+        -- fs.close(nil) is a no-op, as in the firmware
+        fs.close(nil)
     end,
 
     check_path = function()
