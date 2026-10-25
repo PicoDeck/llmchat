@@ -20,7 +20,7 @@ function M.new()
     local F = {
         texts = {}, textFonts = {}, textXs = {}, logs = {}, toasts = {}, menu = {}, events = {}, inputs = {}, confirms = {},
         requests = {}, pending = {}, streaming = {}, config = {}, conns = 0, made = {},
-        rects = {}, fontFiles = {}, missingFonts = {}, nextFontId = 4,
+        rects = {}, spinners = {}, areas = {}, textYs = {}, fontFiles = {}, missingFonts = {}, nextFontId = 4,
         netStatus = 1, clockSynced = true, epoch = 1792000000, ms = 0,
     }
     local fs, files = fakes.fs()
@@ -188,11 +188,18 @@ function M.new()
         F.texts[#F.texts + 1] = t
         F.textFonts[#F.texts] = F.font
     end
-    function display.clear() F.texts, F.textFonts, F.rects, F.textXs = {}, {}, {}, {} end
+    function display.clear()
+        F.texts, F.textFonts, F.rects, F.textXs, F.textYs = {}, {}, {}, {}, {}
+        F.spinners, F.areas = {}, {}
+        F.clears = (F.clears or 0) + 1
+    end
+    -- The clip rect is recorded (F.clip, nil when full screen), not applied.
+    function display.setClipRect(x, y, w, h) F.clip = { x = x, y = y, w = w, h = h } end
+    function display.clearClipRect() F.clip = nil end
     function display.setFont(id) F.font = id end
     function display.getFont() return F.font end
     function display.fillRect(x, y, w, h, c) F.rects[#F.rects + 1] = { x = x, y = y, w = w, h = h, c = c } end
-    function display.drawText(x, _, t) record(t); F.textXs[#F.texts] = x; return display.textWidth(t) end
+    function display.drawText(x, y, t) record(t); F.textXs[#F.texts] = x; F.textYs[#F.texts] = y; return display.textWidth(t) end
     -- The OS draws toasts and the system menu at a flush in the current font.
     function display.flush() F.frames = (F.frames or 0) + 1; F.flushFont = F.font; F.service() end
 
@@ -204,7 +211,11 @@ function M.new()
         return active, 21
     end
     function ui.drawListItem(_, _, _, text, selected) record((selected and "[>] " or "[ ] ") .. text) end
-    function ui.drawSpinner() end
+    function ui.drawSpinner(x, y, r, frame) F.spinners[#F.spinners + 1] = { x = x, y = y, r = r, frame = frame } end
+    -- Records the widget's call (F.areas); the text is not added to F.texts.
+    function ui.drawTextArea(x, y, w, h, text, segments, scrollY, row, col, focused, cursor)
+        F.areas[#F.areas + 1] = { x = x, y = y, w = w, h = h, text = text, scrollY = scrollY, focused = focused, cursor = cursor }
+    end
     function ui.textInput(prompt) F.lastPrompt = prompt; return table.remove(F.inputs, 1) or nil end
     function ui.confirm(msg)
         F.lastConfirm = msg
