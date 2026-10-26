@@ -36,26 +36,32 @@ def stage_app(dest: Path):
             shutil.copy(src, dest / name)
 
 
+SERVICES = ("anthropic", "opencode", "openrouter", "vercel")
+KEYS = {"anthropic": "sk-ant-fake-key", "opencode": "sk-fake-opencode-key",
+        "openrouter": "sk-or-v1-fake-key", "vercel": "vck-fake-key"}
+
+
 @pytest.fixture
 def llmchat(tmp_path):
-    """start(provider="claude", keys=True, prefs=None) -> (sim, api, data_dir).
+    """start(model="anthropic/claude-opus-5-5", keys=True, prefs=None)
+    -> (sim, api, data_dir).
 
-    Stages the app on a fresh SD card and starts a FakeAPI. prefs.json points
-    claude_base / openai_base at it (and selects `provider`; `prefs` adds more
-    keys); with keys, keys.txt holds fake keys for both providers. Launching
-    is the test's job: sim.launch_app(APP)."""
+    Stages the app on a fresh SD card and starts a FakeAPI. prefs.json sets
+    `model` and points every <service>_base at the fake (`prefs` adds more
+    keys); with keys, keys.txt holds fake keys for all four services (KEYS).
+    Launching is the test's job: sim.launch_app(APP)."""
     started = []
 
-    def start(provider="claude", keys=True, prefs=None):
+    def start(model="anthropic/claude-opus-5-5", keys=True, prefs=None):
         api = FakeAPI().start()
         sd = tmp_path / f"sd{len(started)}"
         stage_app(sd / "apps" / APP)
         data = sd / "data" / APP_ID
         data.mkdir(parents=True, exist_ok=True)
         (data / "prefs.json").write_text(json.dumps(
-            {"provider": provider, "claude_base": api.url, "openai_base": api.url, **(prefs or {})}))
+            {"model": model, **{f"{s}_base": api.url for s in SERVICES}, **(prefs or {})}))
         if keys:
-            (data / "keys.txt").write_text("claude=sk-ant-fake-key\nopenai=sk-fake-key\n")
+            (data / "keys.txt").write_text("".join(f"{s}={KEYS[s]}\n" for s in SERVICES))
         sim = PicodeckSimulator(binary_path=os.environ.get("PICODECK_SIM_BINARY"),
                                 sd_card_path=str(sd), test_mode=True)
         sim.start()

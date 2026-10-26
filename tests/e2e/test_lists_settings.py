@@ -87,7 +87,8 @@ def test_open_a_chat_from_recent_chats(llmchat):
     no_lua_errors(sim)
 
 
-def test_set_a_key_in_settings(llmchat):
+def test_settings_keys(llmchat):
+    """Gateways spec 5.4: a key per service, all four saved to keys.txt."""
     sim, api, data = llmchat(keys=False)
     wait(sim, r"\[app\] screen chat", start_app(sim))
     time.sleep(0.5)
@@ -97,23 +98,27 @@ def test_set_a_key_in_settings(llmchat):
     wait(sim, r"\[app\] screen settings", m)
     time.sleep(0.5)
     settled(sim, "settings.png", ((4, 34), (40, 70, 130)))
-    for _ in range(3):  # Provider, Model, Claude key, OpenAI key
+    names = ("anthropic", "opencode", "openrouter", "vercel")  # the first four rows
+    for i, name in enumerate(names):
+        sim.keypress("enter")
+        time.sleep(0.2)
+        type_text(sim, f"sk-e2e-{name}-0123456789")
+        time.sleep(0.3)
+        if i == 0:
+            settled(sim, "settings-editing.png")
+        sim.keypress("enter")
+        time.sleep(0.3)
         sim.keypress("down")
         time.sleep(0.1)
-    sim.keypress("enter")
-    time.sleep(0.2)
-    type_text(sim, "sk-e2e-0123456789")
     time.sleep(0.3)
-    settled(sim, "settings-editing.png")
-    sim.keypress("enter")
-    time.sleep(0.5)
     settled(sim, "settings-masked.png")
     m = mark(sim)
     sim.keypress("esc")
     wait(sim, r"\[app\] screen chat", m)
     keys = (data / "keys.txt").read_text()
-    assert "openai=sk-e2e-0123456789" in keys
-    assert "sk-e2e-0123456789" not in "\n".join(l["text"] for l in sim.get_log_lines())
+    assert keys.splitlines()[1:] == [f"{n}=sk-e2e-{n}-0123456789" for n in names]
+    logged = "\n".join(l["text"] for l in sim.get_log_lines())
+    assert "0123456789" not in logged
     assert (data / "prefs.json").exists()
     assert sim.is_alive()
     no_lua_errors(sim)

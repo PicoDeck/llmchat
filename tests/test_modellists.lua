@@ -185,6 +185,8 @@ return {
         local want = expected("vercel", fixture("vercel"))
         T.eq(listFile(F, "vercel"), "# fetched 1792000000\n" .. table.concat(want, "\n") .. "\n")
         T.same(store:modelList("vercel"), { fetched = 1792000000, ids = want })
+        -- logged with its time, for the device checks and the e2e waits
+        T.ok(F.hasLog("[models] vercel saved " .. #want .. " ids in "), table.concat(F.logs, "\n"))
     end,
 
     fetch_without_a_key_sends_none = function()
@@ -221,6 +223,7 @@ return {
             T.eq(f.state.vercel, "failed", c[2])
             T.eq(f.err.vercel, c[2])
             T.eq(listFile(F, "vercel"), before, c[2] .. ": the old list changed")
+            T.ok(F.hasLog("[models] vercel failed: " .. c[2]), c[2])
         end
         -- closed by the firmware part way through the body
         local body = fixture("vercel")

@@ -69,7 +69,7 @@ def test_send_and_stream(llmchat):
     assert path.stat().st_size > 1000
     assert sim.is_alive()
     streamed = [r for r in api.requests if r["stream"]]
-    assert len(streamed) == 1 and streamed[0]["provider"] == "claude"
+    assert len(streamed) == 1 and streamed[0]["provider"] == "anthropic"
     assert streamed[0]["headers"].get("x-api-key") == "sk-ant-fake-key"
     no_lua_errors(sim)
 

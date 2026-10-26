@@ -131,10 +131,10 @@ def test_c_error_keeps_the_program_line(llmchat):
 
 
 def test_sys_exit_keeps_app(llmchat):
-    """With OpenAI, so the program also arrives in a Responses stream."""
-    sim, api, data = launch(llmchat, provider="openai")
+    """On a gateway model, so the program also arrives in a Chat Completions stream."""
+    sim, api, data = launch(llmchat, model="vercel/deepseek/deepseek-v4.1-flash-1017")
     send(sim, "@prog-exit")
-    assert [r["provider"] for r in api.requests if r["stream"]] == ["openai"]
+    assert [r["provider"] for r in api.requests if r["stream"]] == ["vercel"]
     m = mark(sim)
     sim.keypress("f3")
     wait(sim, r"exit\.lua says bye", m)

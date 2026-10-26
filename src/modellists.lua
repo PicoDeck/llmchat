@@ -175,7 +175,12 @@ function Fetcher:start(serviceIds)
     end
 end
 
-local function fail(self, id, why) self.state[id], self.err[id] = "failed", why end
+local function log(self, text) pcall(self.pc.sys.log, "[models] " .. text) end
+
+local function fail(self, id, why)
+    self.state[id], self.err[id] = "failed", why
+    log(self, id .. " failed: " .. why)
+end
 
 function Fetcher:_begin(id)
     local pc, store = self.pc, self.store
@@ -186,7 +191,8 @@ function Fetcher:_begin(id)
     -- The service's own host (or its loopback test base): the key may go there.
     local headers = {}
     if key then headers.Authorization = "Bearer " .. key end
-    self.cur = { id = id, sc = M.scanner(id), req = Http.get(net, store:base(id) or s.base, s.listPath, headers) }
+    self.cur = { id = id, sc = M.scanner(id), t0 = pc.sys.getTimeMs(),
+                 req = Http.get(net, store:base(id) or s.base, s.listPath, headers) }
 end
 
 -- Saves a list only when it came whole and kept at least one id; anything
@@ -201,6 +207,8 @@ function Fetcher:_end(cur)
         local epoch = ok and type(c) == "table" and c.synced and c.epoch or 0
         if not self.store:saveModelList(id, ids, epoch) then return fail(self, id, "couldn't save it") end
         self.state[id], self.err[id] = nil, nil
+        -- the time is the device checks' (gateways spec 10)
+        log(self, id .. " saved " .. #ids .. " ids in " .. (self.pc.sys.getTimeMs() - cur.t0) .. " ms")
     elseif req.status and req.status ~= 200 then
         fail(self, id, "HTTP " .. tostring(req.status))
     else
