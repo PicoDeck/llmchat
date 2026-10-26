@@ -10,8 +10,9 @@ Open items left when LLM Chat 2.0 was merged (2026-10-26). The build was reviewe
 
 ## Gateways and the model picker (2026-10-26)
 
-- **The device run of the gateways' verify-first lists probe** (device checklist row 17). LISTS_OK, FILTER_MS and TWO_CONNECTIONS in `docs/research/2026-10-26-gateways-verify-first.md` are simulator figures. If a big list can't be downloaded well on the device, ship a short built-in list for that service (`ModelLists.BUILTIN`) and keep typed ids.
-- **The list scanner's speed on the device** (row 18). It is a small streaming JSON scanner (a flat pattern scan can't pair Vercel's ids with their types: 965 `"type"` keys for 480 models). No per-frame budget yet; add one if the frame rate drops while a list downloads.
+- **Done on the device (2026-10-26):** the lists probe and the app's list downloads, filtering and the switch line (checklist rows 17-22), and real chats on Vercel and OpenCode. They led to the `fix/device-lists` changes: a pattern scan for the lists (the JSON scanner froze the app for seconds), the picker preparing each list once, and the `http.lua` chunk hand-off race.
+- **The owner's Anthropic key is rejected** (401 "invalid x-api-key", from the laptop's keys file too): a real Anthropic chat on the device (row 7) waits for a working key.
+- The fetcher scans everything that arrived since the last frame; on the device that is ~150 ms frames at worst while a list downloads. If that ever shows, cap the bytes scanned per frame.
 - **OpenCode's Mistral** rejects every effort but `high` with an HTTP 400 that has no message. A chat retries once without the effort field, but its title request doesn't, so a Mistral chat keeps its cut first message as its title.
 - The owner's OpenCode account answers `kimi-k3` with 403 "Model access is disabled": the picker lists it, and a chat on it shows "OpenCode refused this request." with that message.
 - Later (gateways design 13): prompt caching for Claude models reached through a gateway (OpenRouter needs `cache_control` markers, Vercel `caching: "auto"`); OpenCode's Claude, GPT and Gemini models through their own APIs; remembering a model per chat; prices or context sizes in the picker; `<think>` tags in a reply's text, if a model ever sends them.

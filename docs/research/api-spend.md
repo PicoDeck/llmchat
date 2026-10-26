@@ -42,3 +42,6 @@ Written by tools/record_stream.py, a row per request. An error reply is not bill
 | opencode-title | 200 | deepseek-v4.1-flash | 67 | 64 | $0.0001 |
 | opencode-401 | 401 | - | 0 | 0 | $0.0000 |
 | openrouter-401 | 401 | - | 0 | 0 | $0.0000 |
+| device check: anthropic key (laptop, 1 token) and the device chat | 401 | - | 0 | 0 | $0.0000 |
+| device check: vercel chat + title (estimated; BYOK, upstream) | 200 | deepseek/deepseek-v4.1-flash-1017 | ~200 | ~150 | ~$0.0001 |
+| device check: opencode chat + title (estimated) | 200 | deepseek-v4.1-flash | ~300 | ~150 | ~$0.0002 |
