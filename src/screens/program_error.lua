@@ -1,12 +1,13 @@
 -- The program error screen (spec 5.3, mockup 05): a panel titled "Program
 -- stopped" with the error in red, how long the program ran and the last lines
--- it printed, then "Ask <provider> to fix" (focused) and "Back to chat".
+-- it printed, then "Ask the model to fix" (focused) and "Back to chat".
 -- arg = {name, result = Sandbox.execute's result, chatId = the chat the run
 -- belongs to, or nil when the program's chat was deleted}.
 -- Keys: Left/Right move between the buttons, Enter chooses, F3 runs the
 -- program again, Esc goes back to the chat. Everything is drawn in 6x8.
 local Keys = require("src.keys")
 local Wrap = require("src.wrap")
+local Services = require("src.services")
 
 local S = {}
 S.__index = S
@@ -58,8 +59,9 @@ local function ranFor(r)
     return "It ran for " .. n .. (n == 1 and " second." or " seconds.")
 end
 
-function S:providerLabel()
-    return self.app.chat:provider().label
+-- The current model's short name: the fix goes to it (gateways spec 5.3).
+function S:modelName()
+    return Services.short((self.app.chat:currentModel()))
 end
 
 -- Groups of {text, color} lines, top to bottom.
@@ -77,7 +79,7 @@ function S:groups(errRows, withHint)
     end
     if withHint then
         local g = {}
-        local hint = self:providerLabel() .. " can see the error and the code and send back a fixed version."
+        local hint = self:modelName() .. " can see the error and the code and send back a fixed version."
         for _, line in ipairs(wrapped(hint)) do g[#g + 1] = { line, "dim" } end
         groups[#groups + 1] = g
     end
@@ -161,7 +163,7 @@ function S:draw()
     d.setFont(d.FONT_6X8)
     for _, r in ipairs(rows) do d.drawText(TX, r.y, r.text, th[r.color] or th.fg, false) end
     local by = py + ph + 16
-    local labels = { "Ask " .. self:providerLabel() .. " to fix", "Back to chat" }
+    local labels = { "Ask the model to fix", "Back to chat" }
     for i, b in ipairs(BUTTONS) do
         d.setFont(d.FONT_6X8)
         pc.ui.drawButton(b.x, by, b.w, labels[i], self.focus == i)

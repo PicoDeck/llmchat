@@ -4,8 +4,8 @@ local Titles = require("src.titles")
 
 local P = {}
 
-P.id = "claude"
-P.label = "Claude"
+P.id = "anthropic"
+P.label = "Anthropic"
 P.color = { 217, 119, 87 }
 P.BASE = "https://api.anthropic.com"
 P.MODELS = {

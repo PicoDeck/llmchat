@@ -13,7 +13,7 @@ local function setup(opts)
     _G.picocalc = F.pc
     package.loaded["src.widgets"] = nil
     local seed = Store.new(F.pc.fs, F.pc.json, D)
-    seed:setKey("claude", "sk-ant-secret")
+    seed:setKey("anthropic", "sk-ant-secret")
     if opts.seed then opts.seed(seed, F) end
     local app = require("src.app").new(F.pc, ID, "/apps/llmchat")
     app:frame()

@@ -5,6 +5,7 @@ local Http = require("src.http")
 local SSE = require("src.sse")
 local Titles = require("src.titles")
 local Programs = require("src.programs")
+local Services = require("src.services")
 
 local Chat = {}
 Chat.__index = Chat
@@ -31,15 +32,27 @@ local function trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
 -- would be echoed to the provider, which may reject it).
 local function hasText(s) return s ~= nil and s:find("%S") ~= nil end
 
+-- The current model (gateways spec 5.2: one for every chat, prefs.model):
+-- full id, service id, and the id the service is sent.
+function Chat:currentModel()
+    local full = self.deps.store:prefs().model
+    local sid, rest = Services.split(full)
+    if not sid then
+        full = Services.DEFAULT_MODEL
+        sid, rest = Services.split(full)
+    end
+    return full, sid, rest
+end
+
 function Chat:provider()
-    local prefs = self.deps.store:prefs()
-    return self.deps.providers[prefs.provider] or self.deps.providers.claude
+    local _, sid = self:currentModel()
+    return self.deps.providers[sid]
 end
 
 function Chat:_abort()
     if self.req then self.req:cancel() end
     if self.titleReq then self.titleReq:cancel() end
-    self.req, self.titleReq, self.sse, self.parserFeed = nil, nil, nil, nil
+    self.req, self.titleReq, self.sse, self.parserFeed, self.parserFinish = nil, nil, nil, nil, nil
     self.retryAt, self.doneInfo, self.errMsg, self.errBody = nil, nil, nil, nil
     self.titling = false
 end
@@ -207,8 +220,28 @@ end
 
 function Chat:_prefs() return self.deps.store:prefs() end
 
-function Chat:_key(P)
-    return self.deps.store:keys()[P.id]
+function Chat:_key(serviceId)
+    return self.deps.store:keys()[serviceId]
+end
+
+-- The no-key note (gateways spec 5.2); false when the service has a key.
+function Chat:_noKey(serviceId)
+    if self:_key(serviceId) then return false end
+    self:note("error", "Add your " .. Services.label(serviceId)
+        .. " key in Settings (F5), or pick another model (F4).", true)
+    return true
+end
+
+-- The model the chat last went to, as a full id: the newest switch note or
+-- reply, whichever is later (a reply that failed after a switch leaves the
+-- note as the latest word).
+function Chat:_lastModel()
+    for i = #self.items, 1, -1 do
+        local it = self.items[i]
+        if it.role == "assistant" then return Services.full(it.provider, it.model) end
+        if it.role == "note" and it.kind == "model" then return (it.text:match("^now (.+)$")) end
+    end
+    return nil
 end
 
 function Chat:_online()
@@ -221,15 +254,19 @@ function Chat:send(text)
     text = trim(tostring(text or ""))
     if text == "" then return false, "empty" end
     if self.state ~= "idle" then return false, "busy" end
-    local P = self:provider()
-    if not self:_key(P) then
-        self:note("error", "Add your " .. P.label .. " key in Settings (F5).", true)
-        return false, "nokey"
-    end
+    local full, sid = self:currentModel()
+    if self:_noKey(sid) then return false, "nokey" end
     if #self.items == 0 or not hasConversation(self.items) then
         if self.title == "" then self.title = Titles.fromMessage(text) end
     end
+    local last = self:_lastModel()
+    if last and last ~= full then
+        self.items[#self.items + 1] = { role = "note", kind = "model", text = "now " .. full }
+    end
     self.items[#self.items + 1] = { role = "user", text = text }
+    local store = self.deps.store
+    store:pushRecent(full)
+    store:savePrefs()
     self:_bump()
     self:_start()
     -- On the card while its reply arrives (after the request is on its way,
@@ -247,23 +284,19 @@ function Chat:retry()
         if self.items[i].role ~= "note" then last = self.items[i] break end
     end
     if not last or last.role ~= "user" then return false end
-    local P = self:provider()
-    if not self:_key(P) then
-        self:note("error", "Add your " .. P.label .. " key in Settings (F5).", true)
-        return false
-    end
+    local _, sid = self:currentModel()
+    if self:_noKey(sid) then return false end
     self:_start()
     return true
 end
 
 -- Builds and starts the request for the current items. Sets the state.
 function Chat:_start()
-    local P = self:provider()
-    local prefs = self:_prefs()
+    local full, sid, rest = self:currentModel()
     self.state, self.live = "waiting", { text = "" }
-    self.reqProv = P
-    self.model = prefs.models[P.id] or P.DEFAULT_MODEL
-    self.providerId = P.id
+    self.reqProv, self.reqModel = self.deps.providers[sid], rest
+    self.model, self.providerId = full, sid
+    self.noEffort = false
     self.doneInfo, self.errMsg, self.errBody = nil, nil, nil
     self.clockRetried = false
     self:_bump()
@@ -278,15 +311,16 @@ function Chat:_launch()
     local deps, P = self.deps, self.reqProv
     local prefs = self:_prefs()
     local path, headers, body = P.request(deps.pc.json, self.items, {
-        key = self:_key(P), model = self.model,
-        effort = tostring(prefs.thinking or "low"):lower(),
+        key = self:_key(self.providerId), model = self.reqModel,
+        effort = not self.noEffort and tostring(prefs.thinking or "low"):lower() or nil,
         system = deps.prompt(),
     })
-    local base = deps.store:base(P.id) or P.BASE
+    local base = deps.store:base(self.providerId) or P.BASE
     self.req = Http.post(deps.pc.network, base, path, headers, body)
     self.gotText = false
+    self.doneInfo, self.errMsg, self.errBody = nil, nil, nil
     self.sse = SSE.new(function(name, data) self.parserFeed(name, data) end)
-    self.parserFeed = P.parser(deps.pc.json, {
+    self.parserFeed, self.parserFinish = P.parser(deps.pc.json, {
         text = function(s)
             self.live.text = self.live.text .. s
             self.state = "streaming"
@@ -307,7 +341,7 @@ end
 function Chat:_finishFailed(noteText)
     local live = self.live
     self.state, self.live = "idle", nil
-    self.req, self.sse, self.parserFeed = nil, nil, nil
+    self.req, self.sse, self.parserFeed, self.parserFinish = nil, nil, nil, nil
     if live and hasText(live.text) then
         self.items[#self.items + 1] = {
             role = "assistant", provider = self.providerId, model = self.model,
@@ -381,8 +415,7 @@ function Chat:_complete(info)
     if info.stop == "length" then
         self:_push("info", "Reply cut off at the length limit.")
     elseif info.stop == "refusal" then
-        local P = self.reqProv
-        self:_push("info", P.modelInfo(self.model).label .. " declined to answer this.")
+        self:_push("info", Services.short(self.model) .. " declined to answer this.")
     end
     if not self.longNoted then
         local ok, s = pcall(self.deps.pc.json.encode, self.items)
@@ -399,10 +432,14 @@ end
 
 -- ------------------------------------------------------------------- titles
 
+-- Sent to the chat's own service and model (gateways spec 6.4; Anthropic
+-- titles come from Haiku).
 function Chat:_startTitle()
-    local deps, P = self.deps, self:provider()
-    if self.titleReq then return end
-    local key = self:_key(P)
+    local deps = self.deps
+    local sid, rest = Services.split(self.model)
+    local P = sid and deps.providers[sid]
+    if self.titleReq or not P then return end
+    local key = self:_key(sid)
     local first, reply
     for _, it in ipairs(self.items) do
         if it.role == "user" and not first then first = it.text end
@@ -412,9 +449,9 @@ function Chat:_startTitle()
         self.titlePending = false
         return
     end
-    local path, headers, body = P.titleRequest(deps.pc.json, key, first, reply)
+    local path, headers, body = P.titleRequest(deps.pc.json, key, first, reply, rest)
     self.titleProv = P
-    self.titleReq = Http.post(deps.pc.network, deps.store:base(P.id) or P.BASE, path, headers, body)
+    self.titleReq = Http.post(deps.pc.network, deps.store:base(sid) or P.BASE, path, headers, body)
     self.titleChunks = {}
     self.titling = true
 end
@@ -445,6 +482,31 @@ function Chat:cancelTitle()
 end
 
 -- -------------------------------------------------------------------- tick
+
+-- An HTTP error before any reply. A gateway that rejects the effort field
+-- (HTTP 400) is asked once more without it (gateways verify-first 4).
+function Chat:_httpError(req)
+    local P = self.reqProv
+    if not self.noEffort and P.retryNoEffort and P.retryNoEffort(req.status) then
+        self.noEffort = true
+        req:cancel()
+        self.req, self.sse, self.parserFeed, self.parserFinish = nil, nil, nil, nil
+        return self:_launch()
+    end
+    local body = table.concat(self.errBody or {})
+    return self:_finishFailed(P.describeError(self.deps.pc.json, req.status, body, req.retryAfter))
+end
+
+-- The connection ended on a 200: what arrived is all there is. A stream
+-- complete without its last event (a Chat Completions stream closed after
+-- its finish reason) is done; anything else was cut.
+function Chat:_streamEnded()
+    self.sse:finish()
+    if not self.doneInfo and not self.errMsg and self.parserFinish then self.parserFinish() end
+    if self.doneInfo then return self:_complete(self.doneInfo) end
+    if self.errMsg then return self:_finishFailed(LOST_NOTE .. "\n" .. self.errMsg) end
+    return self:_finishFailed(LOST_NOTE)
+end
 
 function Chat:_tickReply(now)
     if self.retryAt then
@@ -488,23 +550,13 @@ function Chat:_tickReply(now)
             return self:_finishFailed("The clock isn't set yet; try again in a moment.")
         end
         self.clockRetried = false
-        if req.status and req.status ~= 200 then
-            local body = table.concat(self.errBody or {})
-            return self:_finishFailed(self.reqProv.describeError(self.deps.pc.json, req.status, body, req.retryAfter))
-        end
-        if req.status then return self:_finishFailed(LOST_NOTE) end
+        if req.status and req.status ~= 200 then return self:_httpError(req) end
+        if req.status then return self:_streamEnded() end
         return self:_finishFailed(err)
     elseif req.state == "done" then
         self.clockRetried = false
-        if req.status ~= 200 then
-            local body = table.concat(self.errBody or {})
-            local text = self.reqProv.describeError(self.deps.pc.json, req.status, body, req.retryAfter)
-            return self:_finishFailed(text)
-        end
-        self.sse:finish()
-        if self.doneInfo then return self:_complete(self.doneInfo) end
-        if self.errMsg then return self:_finishFailed(LOST_NOTE .. "\n" .. self.errMsg) end
-        return self:_finishFailed(LOST_NOTE) -- the stream ended without its last event
+        if req.status ~= 200 then return self:_httpError(req) end
+        return self:_streamEnded()
     end
 end
 

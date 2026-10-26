@@ -20,7 +20,8 @@ end
 
 return {
     identity = function()
-        T.eq(P.id, "claude")
+        T.eq(P.id, "anthropic")
+        T.eq(P.label, "Anthropic")
         T.eq(P.BASE, "https://api.anthropic.com")
         T.eq(P.DEFAULT_MODEL, "claude-opus-5-5")
         T.eq(P.TITLE_MODEL, "claude-haiku-5-5")

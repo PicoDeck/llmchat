@@ -102,7 +102,7 @@ local function setup(opts)
     _G.picocalc = F.pc -- src/widgets.lua binds to the global at load
     package.loaded["src.widgets"] = nil
     local store = Store.new(F.pc.fs, F.pc.json, D)
-    store:setKey("claude", "sk-ant-secret")
+    store:setKey("anthropic", "sk-ant-secret")
     local progs = Programs.new(store)
     local owner = opts.owner or "c1"
     local names, text = {}, "Here:\n\n"
@@ -712,7 +712,9 @@ return {
         T.ok(has(F, "It ran for less than a second."))
         T.ok(has(F, "It printed:"))
         T.ok(has(F, "line one") and has(F, "line two"))
-        T.ok(has(F, "[B*] Ask Claude to fix"), "fix focused")
+        T.ok(has(F, "[B*] Ask the model to fix"), "fix focused")
+        -- gateways spec 5.3: the hint names the current model, short
+        T.ok(has(F, "claude-opus-5-5 can see the error and the code"), F.screenText())
         T.ok(has(F, "[B] Back to chat"))
         T.ok(has(F, "[F] Enter choose  F3 run again"))
         for _, t in ipairs(F.texts) do T.ok(not t:find("[^\32-\126]"), "printable ASCII: " .. t) end
@@ -720,9 +722,9 @@ return {
             if not t:find("^%[") then T.eq(F.textFonts[i], F.pc.display.FONT_6X8, "6x8: " .. t) end
         end
         press(F, app, "right")
-        T.ok(has(F, "[B] Ask Claude to fix") and has(F, "[B*] Back to chat"), "Right moves the focus")
+        T.ok(has(F, "[B] Ask the model to fix") and has(F, "[B*] Back to chat"), "Right moves the focus")
         press(F, app, "left")
-        T.ok(has(F, "[B*] Ask Claude to fix"), "Left moves it back")
+        T.ok(has(F, "[B*] Ask the model to fix"), "Left moves it back")
         -- F3 runs it again: the error screen comes back
         local adds = F.menuAdds
         press(F, app, "f3")

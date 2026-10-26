@@ -23,7 +23,7 @@ local function setup(opts)
     _G.picocalc = F.pc -- src/widgets.lua binds to the global at load
     package.loaded["src.widgets"] = nil
     local seed = Store.new(F.pc.fs, F.pc.json, D)
-    if opts.key ~= false then seed:setKey("claude", "sk-ant-secret") end
+    if opts.key ~= false then seed:setKey("anthropic", "sk-ant-secret") end
     if opts.seed then opts.seed(seed) end
     F.responder = opts.responder or function(_, _, _, body)
         if not body:find('"stream":true', 1, true) then
@@ -95,6 +95,39 @@ return {
         T.ok(s.ta.focused, "compose box has focus")
         T.eq(app.screenName, "chat")
         T.eq(app.chat.state, "idle")
+    end,
+
+    -- Gateways spec 5.2 (mockup 12): the intro names the current model.
+    intro_shows_the_full_id = function()
+        local F = setup({ seed = function(st)
+            st:prefs().model = "vercel/deepseek/deepseek-v4.1-flash-1017"; st:savePrefs()
+        end })
+        T.ok(has(F, "vercel/deepseek/deepseek-v4.1-flash-1017"), F.screenText())
+        T.ok(has(F, "Recent chats") and has(F, "Settings"))
+        local dot
+        for _, r in ipairs(F.rects) do if r.w == 4 and r.h == 4 then dot = r end end
+        T.ok(dot, "the service dot")
+        T.eq(dot.c, F.pc.display.rgb(215, 215, 215))
+    end,
+
+    -- (mockup 13) the footer's right side is the current model's short name,
+    -- cut with ".." when it would reach the keys.
+    footer_names_the_short_model = function()
+        local F, app, s = setup({ seed = function(st)
+            st:prefs().model = "vercel/google/gemini-3.8-flash"; st:setKey("vercel", "vk"); st:savePrefs()
+        end, responder = function(_, _, _, body)
+            if not body:find('"stream":true', 1, true) then return 500, {}, "" end
+            return 200, {}, chunked("vercel-text.sse", 60)
+        end })
+        sendText(F, app, "hi")
+        T.ok(has(F, "| gemini-3.8-flash"), F.screenText())
+        app.store:prefs().model = "openrouter/vendor/" .. ("x"):rep(80)
+        app.chat:_bump()
+        frames(app, 2)
+        local _, right = s:footer()
+        T.eq(right:sub(-2), "..")
+        local left = s:footer()
+        T.ok(#left * 6 + 12 + #right * 6 <= 312, left .. " | " .. right)
     end,
 
     typing_and_enter_sends = function()
@@ -287,7 +320,7 @@ return {
         sendText(F, app, "hi")
         frames(app)
         T.eq(#F.requests, 0)
-        T.ok(has(F, "Add your Claude key in Settings"), "note drawn")
+        T.ok(has(F, "Add your Anthropic key in Settings"), "note drawn")
         T.eq(app.screens.chat.ta:getText(), "hi", "draft kept")
     end,
     imports_old_key_at_startup = function()
@@ -298,7 +331,7 @@ return {
                 F.config.llmchat_api_key = "sk-ant-old"
             end,
         })
-        T.eq(app.store:keys().claude, "sk-ant-old")
+        T.eq(app.store:keys().anthropic, "sk-ant-old")
         T.eq(F.config.llmchat_api_key, nil)
         T.eq(F.config.llmchat_provider, nil)
         -- the key is usable at once

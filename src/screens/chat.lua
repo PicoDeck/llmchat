@@ -5,6 +5,7 @@ local Markdown = require("src.markdown")
 local Wrap = require("src.wrap")
 local Fold = require("src.fold")
 local Keys = require("src.keys")
+local Services = require("src.services")
 
 local S = {}
 S.__index = S
@@ -381,7 +382,7 @@ function S:drawRow(row, ry, e)
         d.fillRect(row.px + 1, ry, row.pw - 2, row.h - 1, th.panel)
     elseif kind == "bullet" then
         if not row.label then
-            local bar = th.bar[e.provider] or th.bar.claude
+            local bar = th.bar[e.provider] or th.dim
             d.fillRect(row.bx, ry + spec.rowH // 2 - 2, 4, 4, bar)
         end
     end
@@ -411,13 +412,13 @@ function S:drawIntro()
     d.setFont(spec.bold)
     d.drawText(x, 108, title, th.fg, false)
     d.setFont(d.FONT_6X8)
-    local app = self.app
-    local prefs = app.store:prefs()
-    local P = self.chat:provider()
-    local label = P.label .. " " .. P.modelInfo(prefs.models[P.id] or P.DEFAULT_MODEL).label
+    -- the current model's full id with its service's dot (gateways spec 5.2)
+    local label, sid = self.chat:currentModel()
+    local max = (320 - 16) // 6 - 2
+    if #label > max then label = label:sub(1, max - 2) .. ".." end
     local w = 8 + #label * 6
     local lx = (320 - w) // 2
-    d.fillRect(lx, 134, 4, 4, th.bar[P.id] or th.bar.claude)
+    d.fillRect(lx, 134, 4, 4, th.bar[sid] or th.dim)
     d.drawText(lx + 8, 132, label, th.dim, false)
     local keys = { { "F1", "Recent chats" }, { "F5", "Settings" } }
     local total = 0
@@ -457,11 +458,13 @@ function S:footer()
     else
         left = "Enter send"
     end
+    -- the current model's short name, cut with ".." before it reaches the
+    -- keys (gateways spec 5.2)
     local right = ""
     if #chat.items > 0 or chat.live then
-        local P = chat.deps.providers[chat.providerId] or chat:provider()
-        local model = chat.model or self.app.store:prefs().models[P.id] or P.DEFAULT_MODEL
-        right = P.modelInfo(model).label
+        right = Services.short((chat:currentModel()))
+        local room = (312 - #left * 6 - 12) // 6
+        if #right > room then right = room > 2 and right:sub(1, room - 2) .. ".." or "" end
     end
     return left, right
 end
@@ -494,7 +497,7 @@ function S:draw()
                 if e.kind == "user" then
                     d.fillRect(314 - e.w, ey, e.w, e.h, th.mine)
                 elseif e.kind == "assistant" then
-                    d.fillRect(BAR_X, ey, 2, e.h, th.bar[e.provider] or th.bar.claude)
+                    d.fillRect(BAR_X, ey, 2, e.h, th.bar[e.provider] or th.dim)
                 end
                 for _, row in ipairs(e.rows) do
                     local ry = ey + row.y

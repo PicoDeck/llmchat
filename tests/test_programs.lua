@@ -34,14 +34,14 @@ local function sseOf(json, text)
 end
 
 local function newChat(F, store, progs, reply)
-    store:setKey("claude", "sk-ant-secret")
+    store:setKey("anthropic", "sk-ant-secret")
     F.responder = function(_, _, _, body)
         if not body:find('"stream"', 1, true) then return 200, {}, '{"content":[{"type":"text","text":"Dice"}]}' end
         return 200, {}, sseOf(F.pc.json, reply)
     end
     return Chat.new({
         pc = F.pc, store = store, programs = progs,
-        providers = { claude = require("src.providers.claude"), openai = require("src.providers.openai") },
+        providers = require("src.app").providers(),
         prompt = function() return "S" end,
     })
 end
@@ -165,7 +165,7 @@ return {
         _G.picocalc = F.pc
         package.loaded["src.widgets"] = nil
         local seed = Store.new(F.pc.fs, F.pc.json, D)
-        seed:setKey("claude", "sk-ant-secret")
+        seed:setKey("anthropic", "sk-ant-secret")
         seed:saveChat(chatRow("a1", "Dice roller", F))
         Programs.new(seed):save("a1", { { name = "dice.lua", code = "a\n" } }, 50)
         local app = require("src.app").new(F.pc, ID, "/apps/llmchat")
@@ -261,7 +261,7 @@ return {
     end,
     cap_eviction_orphans_programs = function()
         local F, store, p = mk()
-        store:setKey("claude", "k")
+        store:setKey("anthropic", "k")
         local first
         for i = 1, Store.CAP do
             local c = chatRow(string.format("c%03d", i), "t" .. i, F)

@@ -27,6 +27,18 @@ App.SCREENS = {
     programError = "src.screens.program_error",
 }
 
+-- One provider per service, keyed by service id (gateways spec 4): the
+-- Anthropic Messages API, and the Chat Completions provider per gateway.
+function App.providers()
+    local Services, CC = require("src.services"), require("src.providers.cc")
+    return {
+        anthropic = require("src.providers.claude"),
+        opencode = CC.new(Services.BY_ID.opencode),
+        openrouter = CC.new(Services.BY_ID.openrouter),
+        vercel = CC.new(Services.BY_ID.vercel),
+    }
+end
+
 function App.new(pc, appId, appDir)
     local self = setmetatable({ pc = pc, appId = appId, dir = appDir, screens = {}, dirty = true, running = true }, App)
     Sandbox.lockStrings() -- spec 9.3: getmetatable("") can't reach the real string table
@@ -44,7 +56,7 @@ function App.new(pc, appId, appDir)
     self.programs = Programs.new(self.store)
     self.chat = Chat.new({
         pc = pc, store = self.store, programs = self.programs,
-        providers = { claude = require("src.providers.claude"), openai = require("src.providers.openai") },
+        providers = App.providers(),
         prompt = function()
             local function read(name)
                 local ok, text = pcall(pc.fs.readFile, appDir .. "/prompt/" .. name)
