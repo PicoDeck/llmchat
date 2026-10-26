@@ -45,3 +45,7 @@ Written by tools/record_stream.py, a row per request. An error reply is not bill
 | device check: anthropic key (laptop, 1 token) and the device chat | 401 | - | 0 | 0 | $0.0000 |
 | device check: vercel chat + title (estimated; BYOK, upstream) | 200 | deepseek/deepseek-v4.1-flash-1017 | ~200 | ~150 | ~$0.0001 |
 | device check: opencode chat + title (estimated) | 200 | deepseek-v4.1-flash | ~300 | ~150 | ~$0.0002 |
+| connection-lost debug: d20 reply timed on the laptop (BYOK, upstream) | 200 | deepseek/deepseek-v4.1-flash-1017 | 4956 | 2596 | $0.0016 |
+| connection-lost debug: 7 d20 replies on the device, 3 complete, 4 cut (estimated; BYOK, upstream) | 200 | deepseek/deepseek-v4.1-flash-1017 | ~35000 | ~15000 | ~$0.012 |
+| connection-lost debug: opencode replay (laptop key rejected) | 401 | - | 0 | 0 | $0.0000 |
+| connection-lost debug: 5 long program replies on the device (2 cut, 3 complete) plus titles (estimated; BYOK, upstream) | 200 | deepseek/deepseek-v4.1-flash-1017 | ~30000 | ~35000 | ~$0.045 |

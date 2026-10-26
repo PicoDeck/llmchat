@@ -10,6 +10,11 @@ Open items left when LLM Chat 2.0 was merged (2026-10-26). The build was reviewe
 
 ## Gateways and the model picker (2026-10-26)
 
+- **Long replies from the gateways (2026-10-26).** Needs picodeck `fix/core1-pool-oom` (Mongoose decrypts every ready TLS record; the request buffer is freed once the response starts) for any reply over ~1 MB; without it the reply is cut with "Connection lost" (`partial: oom`). Device checklist row 23. Left over:
+  - Text events are still decoded one by one, ~55 KB/s against 60-85 KB/s arriving: a 2 MB reply's text finishes 16-27 s after the stream, and the backlog (up to ~1 MB) waits in the Lua heap. A pattern-based reader for `delta.content` (with JSON string unescaping) would remove most of it.
+  - While a fast stream arrives Core 1 manages 30-45% of its 1 ms ticks, the longest 70-90 ms (`audiostat`), and it also runs the audio pollers: sound may stutter during a reply. Not looked into (PSRAM contention with Core 0's parsing is a guess).
+  - picodeck `src/main.c` (core1 entry comment) says `wifi_poll()` takes `display_spi_lock()`; there is no such lock and the LCD is on PIO SPI (`src/drivers/wifi.h`).
+
 - **Done on the device (2026-10-26):** the lists probe and the app's list downloads, filtering and the switch line (checklist rows 17-22), and real chats on Vercel and OpenCode. They led to the `fix/device-lists` changes: a pattern scan for the lists (the JSON scanner froze the app for seconds), the picker preparing each list once, and the `http.lua` chunk hand-off race.
 - **The owner's Anthropic key is rejected** (401 "invalid x-api-key", from the laptop's keys file too): a real Anthropic chat on the device (row 7) waits for a working key.
 - The fetcher scans everything that arrived since the last frame; on the device that is ~150 ms frames at worst while a list downloads. If that ever shows, cap the bytes scanned per frame.
