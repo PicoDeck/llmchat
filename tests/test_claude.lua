@@ -193,4 +193,23 @@ return {
         T.eq(P.describeError(J, 429, "", 7), "Rate limited; try again in a moment. (7 s)")
         T.eq(P.describeError(J, 418, "<html>"), "Claude: HTTP 418.")
     end,
+
+    -- The raw blocks go back to Claude on every later request, re-encoded by
+    -- the firmware's picocalc.json, which writes an empty table as {}
+    -- (picodeck lua_bridge_json.c). An empty array in a block (citations: [])
+    -- would come back as {}, Claude would reject it, and history is
+    -- append-only, so the chat would fail for good. No recorded block has one.
+    raw_blocks_hold_no_empty_tables = function()
+        local function walk(v, path)
+            if type(v) ~= "table" then return end
+            T.ok(next(v) ~= nil, "empty table at " .. path)
+            for k, x in pairs(v) do walk(x, path .. "." .. tostring(k)) end
+        end
+        for _, name in ipairs({ "claude-text.sse", "claude-thinking.sse", "claude-maxtokens.sse",
+                                "claude-markdown.sse", "claude-fallback.hand.sse" }) do
+            local r = run(name)
+            T.ok(r.done and #r.done.raw > 0, name .. ": no raw blocks")
+            walk(r.done.raw, name)
+        end
+    end,
 }

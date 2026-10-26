@@ -1,3 +1,2 @@
-: provisional, hand-written from api-facts.md; replace by tools/record_stream.py
 #status 401
 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"},"request_id":"req_fixture"}

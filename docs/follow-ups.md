@@ -2,10 +2,9 @@
 
 Open items left when LLM Chat 2.0 was merged (2026-10-26). The build was reviewed task by task and then as a whole branch. Everything here was judged safe to merge, but some of it must be done before a release tag.
 
-## Before the first real recording (needs the API keys)
+## Needs the API keys
 
-- Replace the hand-written fixtures in `tests/fixtures/` (each starts with a `: provisional` comment) with recordings, and re-run `make test`.
-- Check that Claude's raw content blocks survive the JSON round trip. An empty array such as `citations: []` may re-encode as `{}`. History is append-only, so a 400 from this would break that chat on every later request. Either confirm it with the first recordings or clean the raw blocks before sending.
+- The Claude fixtures (`claude-text`, `-thinking`, `-maxtokens`, `-title`, `-401`) are real recordings since 2026-10-26. Still hand-written: `claude-error`, `-fallback`, `-refusal` (`.hand.sse`, which can't be recorded on demand), `claude-markdown.sse` (for the e2e screenshots) and every `openai-*` fixture. There is no OpenAI key, and the OpenAI provider is being redesigned around the gateways.
 - Write and run the stream and POST-size probes (plan Task 1, Steps 1, 2, 6 and 7; `tools/probes/` has only the key-free ones so far). Then set the long-chat limit `LONG_BYTES` in `src/chat.lua` from the POST probe (it is 150 KB for now).
 - Run the PENDING rows in `docs/device-checklist.md`: real Claude and OpenAI chats, streaming smoothness, memory after a long chat, the prompt-cache check, ids near midnight, the old-key import, opening a 150 KB chat, the frame rate while a program streams, and the cost of the run-over gate and of the save at send.
 
@@ -22,6 +21,7 @@ Open items left when LLM Chat 2.0 was merged (2026-10-26). The build was reviewe
   - `env.load` reads a reader function's whole chunk itself, then loads the string, so an error in the reader no longer runs the runner's message handler and closes the gate early.
   - `callbackOf` returns early once `run.stopping` is set, so after one Stop no program callback runs again.
 - `tools/record_stream.py` doesn't scrub `call_` ids (OpenAI function-call ids).
+- The firmware's `picocalc.json` writes an empty table as `{}` (picodeck `lua_bridge_json.c`), so an empty array in a raw Claude block would go back as `{}` and Claude would reject the chat for good. No recorded block has one, and `raw_blocks_hold_no_empty_tables` (`tests/test_claude.lua`) guards it. Clean the raw blocks before sending if a later feature adds citations or tool blocks.
 - picodeck: Exit App during a slowed write leaves the SD bus at 1 MHz after the app exits. Once exit is requested, the firmware re-raises it before every Lua instruction, so the app's reset never runs, and the exit teardown doesn't restore the SD clock (only boot, a remount and a CPU clock change do). It is slow but safe, and most likely during the save at send. The firmware's store, updater and `download.lua` have the same gap. Fix in picodeck: call `sd_set_slow_mode(false)` in the Lua runner's teardown.
 - CI runs the tests under one Lua only. Add a job for `build/lua32`, the 32-bit-number build the device matches. `proxied_types_match_firmware` and the two download-library tests check nothing when `PICODECK_ROOT` is unset, so give CI a picodeck checkout.
 - Possible slowness on the device:

@@ -396,13 +396,16 @@ return {
         local body = bodyOf(F, 2)
         T.eq(body.model, "claude-haiku-5-5")
         T.eq(body.stream, nil)
-        T.eq(chat.title, "Cups in a litre")
-        T.eq(store:chats()[1].title, "Cups in a litre")
-        T.eq(store:loadChat(chat.id).title, "Cups in a litre")
+        -- the title the recorded reply gives, however the model worded it
+        local want = Titles.clean(claude.titleText(require("tests.json"), select(2, Fixture.read("claude-title.json"))))
+        T.ok(want and want ~= "" and want ~= Titles.fromMessage("how many cups in a litre?"), tostring(want))
+        T.eq(chat.title, want)
+        T.eq(store:chats()[1].title, want)
+        T.eq(store:loadChat(chat.id).title, want)
         chat:send("and gallons?")
         run(F, chat)
         T.eq(#F.requests, 3) -- no title request after the second reply
-        T.eq(chat.title, "Cups in a litre")
+        T.eq(chat.title, want)
     end,
 
     title_failure_keeps_cut_message = function()
