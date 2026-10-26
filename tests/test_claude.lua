@@ -138,6 +138,40 @@ return {
         T.eq(done.raw[1].type, "fallback")
         T.eq(done.raw[2].signature, "T")
     end,
+    -- Gateways spec 7: items from before the rename say "claude", new ones
+    -- "anthropic"; both echo their raw blocks.
+    raw_echoed_for_anthropic_items = function()
+        local raw = { { type = "thinking", thinking = "", signature = "sig" }, { type = "text", text = "b" } }
+        for _, prov in ipairs({ "claude", "anthropic" }) do
+            local items = { { role = "user", text = "a" },
+                { role = "assistant", provider = prov, model = "anthropic/claude-opus-5-5", text = "b", raw = raw },
+                { role = "user", text = "c" } }
+            local _, _, body = P.request(J, items, { key = "k", model = "claude-opus-5-5", effort = "low", system = "S" })
+            T.same(J.decode(body).messages[2], { role = "assistant", content = raw }, prov)
+        end
+        local items = { { role = "user", text = "a" },
+            { role = "assistant", provider = "vercel", text = "b", raw = raw }, { role = "user", text = "c" } }
+        local _, _, body = P.request(J, items, { key = "k", model = "claude-opus-5-5", effort = "low", system = "S" })
+        T.same(J.decode(body).messages[2], { role = "assistant", content = "b" })
+    end,
+    -- The chat calls the parser's finish when the connection ends (the CC
+    -- provider completes a stream there); Claude's ends at message_stop.
+    parser_finish_is_a_no_op = function()
+        local done = 0
+        local feed, finish = P.parser(J, { text = function() end, thinking = function() end,
+            error = function() end, done = function() done = done + 1 end })
+        T.eq(type(finish), "function")
+        feed("message_delta", '{"type":"message_delta","delta":{"stop_reason":"end_turn"}}')
+        finish()
+        T.eq(done, 0)
+        feed("message_stop", '{"type":"message_stop"}')
+        finish()
+        T.eq(done, 1)
+    end,
+    title_ignores_the_chat_model = function()
+        local _, _, body = P.titleRequest(J, "k", "q", "a", "claude-opus-5-5")
+        T.eq(J.decode(body).model, "claude-haiku-5-5")
+    end,
     parser_requires_json = function()
         T.raises(function() P.parser(nil, { text = function() end }) end, "claude.parser: json codec required")
     end,
@@ -147,12 +181,12 @@ return {
     -- spec 6.4 (final review I3): every 5xx is busy, 502 and 504 included
     describe_every_5xx_busy = function()
         for _, status in ipairs({ 500, 501, 502, 503, 504, 529, 599 }) do
-            T.eq(P.describeError(J, status, ""), "Claude is busy; try again.", tostring(status))
+            T.eq(P.describeError(J, status, ""), "Anthropic is busy; try again.", tostring(status))
         end
         local body = '{"type":"error","error":{"type":"api_error","message":"bad gateway"}}'
         T.ok(P.describeError(J, 504, body):find("\nbad gateway$"))
-        T.eq(P.describeError(J, 499, ""), "Claude: HTTP 499.")
-        T.eq(P.describeError(J, 600, ""), "Claude: HTTP 600.")
+        T.eq(P.describeError(J, 499, ""), "Anthropic: HTTP 499.")
+        T.eq(P.describeError(J, 600, ""), "Anthropic: HTTP 600.")
     end,
     error_event = function()
         local r = run("claude-error.hand.sse")
@@ -184,14 +218,14 @@ return {
         local status, body = Fixture.read("claude-401.json")
         T.eq(status, 401)
         local s = P.describeError(J, status, body)
-        T.eq(s:sub(1, 44), "Claude rejected the API key. Check Settings.")
+        T.eq(s:sub(1, 47), "Anthropic rejected the API key. Check Settings.")
         T.ok(s:find("invalid x-api-key", 1, true))
     end,
     describe_529_busy = function()
         local s = P.describeError(J, 529, "")
-        T.eq(s:sub(1, 26), "Claude is busy; try again.")
+        T.eq(s:sub(1, 29), "Anthropic is busy; try again.")
         T.eq(P.describeError(J, 429, "", 7), "Rate limited; try again in a moment. (7 s)")
-        T.eq(P.describeError(J, 418, "<html>"), "Claude: HTTP 418.")
+        T.eq(P.describeError(J, 418, "<html>"), "Anthropic: HTTP 418.")
     end,
 
     -- The raw blocks go back to Claude on every later request, re-encoded by

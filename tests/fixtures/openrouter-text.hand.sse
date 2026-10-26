@@ -1,3 +1,4 @@
+: hand-written from docs/research/gateway-api-facts.md (OpenRouter streaming and error docs), gateways spec 10
 : OPENROUTER PROCESSING
 
 data: {"id":"gen-fixture","provider":"DeepSeek","model":"deepseek/deepseek-v4.1-flash-1017","object":"chat.completion.chunk","created":1792990000,"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}

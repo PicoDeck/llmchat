@@ -67,7 +67,8 @@ local function messages(items)
         if it.role == "user" then
             out[#out + 1] = { role = "user", content = it.text or "" }
         elseif it.role == "assistant" then
-            local blocks = it.provider == "claude" and type(it.raw) == "table" and #it.raw > 0
+            local blocks = (it.provider == "anthropic" or it.provider == "claude")
+                and type(it.raw) == "table" and #it.raw > 0
                 and echoBlocks(it.raw)
             if blocks then
                 out[#out + 1] = { role = "assistant", content = blocks }
@@ -99,8 +100,10 @@ function P.request(json, items, opts)
 end
 
 -- json is the codec (required); handlers: text(s), thinking(), error(msg), done{stop, raw, usage}.
--- Returns feed(eventName, dataString). Unknown events and block types are
--- ignored (blocks are still kept for echoing).
+-- Returns feed(eventName, dataString), finish(). Unknown events and block
+-- types are ignored (blocks are still kept for echoing). finish (the chat
+-- calls it when the connection ends) does nothing: a Claude stream is
+-- complete only at message_stop.
 function P.parser(json, handlers)
     local blocks, top = {}, 0
     local usage, stop = {}, nil
@@ -171,10 +174,11 @@ function P.parser(json, handlers)
             local m = type(ev.error) == "table" and ev.error.message
             handlers.error(m or "Stream error")
         end
-    end
+    end, function() end
 end
 
-function P.titleRequest(json, key, firstUser, firstReply)
+-- model (the chat's) is not used: Claude titles always come from Haiku.
+function P.titleRequest(json, key, firstUser, firstReply, model)
     local content = Titles.PROMPT .. "\n\n" .. Titles.cutChars(firstUser, 1000) .. "\n\n" .. Titles.cutChars(firstReply, 1000)
     local body = {
         model = P.TITLE_MODEL,
@@ -200,14 +204,14 @@ end
 function P.describeError(json, status, body, retryAfter)
     local text
     if status == 401 or status == 403 then
-        text = "Claude rejected the API key. Check Settings."
+        text = "Anthropic rejected the API key. Check Settings."
     elseif status == 429 then
         text = "Rate limited; try again in a moment."
         if retryAfter then text = text .. " (" .. tostring(retryAfter) .. " s)" end
     elseif type(status) == "number" and status >= 500 and status <= 599 then -- 5xx, 529 overloaded included (spec 6.4)
-        text = "Claude is busy; try again."
+        text = "Anthropic is busy; try again."
     else
-        text = "Claude: HTTP " .. tostring(status) .. "."
+        text = "Anthropic: HTTP " .. tostring(status) .. "."
     end
     local ok, r = pcall(json.decode, body or "")
     if ok and type(r) == "table" and type(r.error) == "table" and type(r.error.message) == "string" then

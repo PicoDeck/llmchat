@@ -225,7 +225,7 @@ return {
         chat:open(nil)
         chat:send("hi")
         run(F, chat)
-        T.ok(hasNote(chat, "Claude rejected the API key."), "401 note")
+        T.ok(hasNote(chat, "Anthropic rejected the API key."), "401 note")
         T.eq(chat.state, "idle")
         mode = "ok"
         T.eq(chat:retry(), true)
@@ -543,7 +543,7 @@ return {
             if chat.state == "idle" then break end
         end
         T.ok(cut, "connection cut mid-body")
-        T.ok(hasNote(chat, "Claude rejected the API key."), "provider error shown")
+        T.ok(hasNote(chat, "Anthropic rejected the API key."), "provider error shown")
         T.ok(not hasNote(chat, "Connection lost"))
     end,
 }
