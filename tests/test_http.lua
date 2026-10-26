@@ -28,6 +28,37 @@ return {
         T.eq(Http.parseBase("ftp://x"), nil)
     end,
 
+    -- Gateways spec 8: the model lists come over GET, with the same request
+    -- object and states as a POST.
+    get_streams_chunks = function()
+        local F = setup(function(method, path) return 200, {}, { method .. " " .. path, "bb" } end)
+        local req = Http.get(F.pc.network, "https://ai-gateway.vercel.sh", "/v1/models", { Authorization = "Bearer k" })
+        T.eq(req.state, "sending")
+        T.eq(F.requests[1].method, "GET")
+        T.eq(F.requests[1].path, "/v1/models")
+        T.same(F.requests[1].headers, { Authorization = "Bearer k" })
+        T.same(drain(F, req), { "GET /v1/models", "bb" })
+        T.eq(req.state, "done")
+        T.eq(req.status, 200)
+        T.ok(F.made[1].released)
+        T.eq(F.made[1].host, "ai-gateway.vercel.sh")
+        T.ok(not Http.inFlight(F.pc.network))
+    end,
+    get_bad_base = function()
+        local F = setup(function() return 200, {}, "" end)
+        local req = Http.get(F.pc.network, "nonsense", "/v1/models", {})
+        T.eq(req.state, "failed")
+        T.eq(req.err, "bad base URL")
+        T.eq(F.conns, 0)
+    end,
+    get_in_flight_until_done = function()
+        local F = setup(function() return 200, {}, { "a", "b" } end)
+        local req = Http.get(F.pc.network, "https://openrouter.ai", "/api/v1/models", {})
+        T.ok(Http.inFlight(F.pc.network))
+        drain(F, req)
+        T.ok(not Http.inFlight(F.pc.network))
+    end,
+
     bad_base_opens_nothing = function()
         local F = setup(function() return 200, {}, "" end)
         local req = Http.post(F.pc.network, "nonsense", "/v1", {}, "{}")

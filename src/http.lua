@@ -1,4 +1,5 @@
--- Streaming POST transport (spec 3, 6.1). The firmware runs HTTP callbacks
+-- Streaming HTTP transport (spec 3, 6.1): POST for chats, GET for the
+-- gateways' model lists. The firmware runs HTTP callbacks
 -- inside its service pass, between any two Lua statements, so the callbacks
 -- here only append to `req.rec` and set flags in it. Everything else (state,
 -- status, retryAfter) is derived on the main loop, in req:poll() / req:take().
@@ -100,8 +101,8 @@ function Req:cancel()
     end
 end
 
--- net: picocalc.network; base: URL string. headers: table; body: string.
-function M.post(net, base, path, headers, body)
+-- Starts a request: method "post" (with body) or "get".
+local function request(net, base, method, path, headers, body)
     local req = setmetatable({
         state = "sending",
         rec = { chunks = {}, n = 0 },
@@ -150,7 +151,12 @@ function M.post(net, base, path, headers, body)
         req.conn = nil -- the firmware releases the connection after this
     end)
 
-    local ok, sent, serr = pcall(conn.post, conn, path, headers, body)
+    local ok, sent, serr
+    if method == "get" then
+        ok, sent, serr = pcall(conn.get, conn, path, headers)
+    else
+        ok, sent, serr = pcall(conn.post, conn, path, headers, body)
+    end
     if not ok or not sent then
         detach(conn)
         pcall(conn.close, conn)
@@ -158,6 +164,16 @@ function M.post(net, base, path, headers, body)
         fail(req, (not ok and tostring(sent)) or serr or "request failed")
     end
     return req
+end
+
+-- net: picocalc.network; base: URL string. headers: table; body: string.
+function M.post(net, base, path, headers, body)
+    return request(net, base, "post", path, headers, body)
+end
+
+-- The same request object and states as post (gateways spec 8: the lists).
+function M.get(net, base, path, headers)
+    return request(net, base, "get", path, headers)
 end
 
 return M
