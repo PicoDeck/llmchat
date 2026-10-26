@@ -206,10 +206,24 @@ return {
         local c = F.made[1]
         T.eq(c.connectTimeout, 20)
         T.eq(c.readTimeout, 120)
-        T.eq(c.bufferSize, 65536)
+        T.eq(c.bufferSize, 512 * 1024)
         T.eq(Http.CONNECT_S, 20)
         T.eq(Http.READ_S, 120)
-        T.eq(Http.BUFFER, 64 * 1024)
+        T.eq(Http.BUFFER, 512 * 1024)
+        T.eq(Http.BUFFER_MIN, 64 * 1024)
+    end,
+
+    -- A fast stream outruns a 64 KB buffer in about a second of the app not
+    -- reading; when the big one can't be had, the request still goes, with
+    -- the small one.
+    buffer_falls_back_when_refused = function()
+        local F = setup(function() return 200, {}, "hello" end)
+        F.bufferLimit = 100 * 1024
+        local req = Http.post(F.pc.network, BASE, "/p", {}, "")
+        T.same(F.made[1].bufferTries, { 512 * 1024, 64 * 1024 })
+        T.eq(F.made[1].bufferSize, 64 * 1024)
+        T.same(drain(F, req), { "hello" })
+        T.eq(req.state, "done")
     end,
 
     take_never_returns_empty_strings = function()

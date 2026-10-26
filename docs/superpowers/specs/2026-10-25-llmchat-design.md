@@ -224,7 +224,8 @@ Each provider module turns the neutral conversation into a request, and stream e
   - Lines starting `:` (comments, keep-alives) are ignored.
   - An event is dispatched on a blank line.
 - `src/http.lua` wraps `picocalc.network.http` for one streaming POST (and a GET, for the gateways' model lists, gateways design 8):
-  - Setup: `setReadBufferSize(64 * 1024)`, `setConnectTimeout(20)`, `setReadTimeout(120)` (idle-based; long enough for a model thinking before its first word).
+  - Setup: `setReadBufferSize(512 * 1024)`, or `64 * 1024` when that is refused; `setConnectTimeout(20)`, `setReadTimeout(120)` (idle-based; long enough for a model thinking before its first word).
+    - Why 512 KB (changed 2026-10-26): the buffer holds what arrives while the app isn't reading, and the device's TCP has no receive window, so a full buffer fails the reply. A gateway streams a reasoning model as one event of about 325 bytes per token, 60-85 KB/s, which filled 64 KB in under a second of the app being busy (a card write at send).
   - Callbacks only append `conn:read()` chunks to a list and set flags. The main loop drains the list into the SSE parser every frame.
   - A non-200 status means the body is a JSON error, not a stream: read it whole and decode it (section 6.4).
   - Esc calls `conn:close()`.

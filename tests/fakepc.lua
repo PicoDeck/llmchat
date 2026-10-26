@@ -326,7 +326,8 @@ function M.new()
     -- in one service pass; a table of chunks arrives one chunk per pass, the
     -- complete callback firing with the last one. A "" chunk is an empty
     -- read at a chunk boundary. Knobs: F.poolFull (http.new fails),
-    -- F.postError (post raises), F.holding (service does nothing).
+    -- F.postError (post raises), F.holding (service does nothing),
+    -- F.bufferLimit (setReadBufferSize refuses anything larger).
     local network = { kStatusNotConnected = 0, kStatusConnected = 1, kStatusNotAvailable = 2, http = {} }
     function network.getStatus() return F.netStatus end
     function network.http.new(host, port, tls)
@@ -341,7 +342,15 @@ function M.new()
         function c:setKeepAlive(v) open(); self.keep = v end
         function c:setConnectTimeout(s) open(); self.connectTimeout = s end
         function c:setReadTimeout(s) open(); self.readTimeout = s end
-        function c:setReadBufferSize(n) open(); self.bufferSize = n; return true end
+        function c:setReadBufferSize(n)
+            open()
+            self.bufferTries = self.bufferTries or {}
+            self.bufferTries[#self.bufferTries + 1] = n
+            -- F.bufferLimit: a buffer larger than this can't be allocated (the old one stays)
+            if F.bufferLimit and n > F.bufferLimit then return false end
+            self.bufferSize = n
+            return true
+        end
         function c:setRequestCallback(fn) open(); self.cb.req = fn end
         function c:setHeadersReadCallback(fn) open(); self.cb.headers = fn end
         function c:setRequestCompleteCallback(fn) open(); self.cb.done = fn end

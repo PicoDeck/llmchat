@@ -7,7 +7,13 @@ local M = {}
 
 M.CONNECT_S = 20
 M.READ_S = 120 -- idle-based: restarts whenever bytes arrive
-M.BUFFER = 64 * 1024
+-- The firmware's receive buffer. It holds what arrives while the app isn't
+-- reading (a card write, a long frame), and the device's TCP has no receive
+-- window, so a full one fails the transfer: a gateway streaming a reasoning
+-- model at 60-85 KB/s fills 64 KB in under a second. Taken from the Lua heap
+-- for the request's life; the smaller size when the big one can't be had.
+M.BUFFER = 512 * 1024
+M.BUFFER_MIN = 64 * 1024
 local READ_CHUNK = 16384
 
 -- "https://host[:port]" or "http://host[:port]" -> {host, port, tls}, or nil.
@@ -124,7 +130,7 @@ local function request(net, base, method, path, headers, body)
     live[req] = net
     conn:setConnectTimeout(M.CONNECT_S)
     conn:setReadTimeout(M.READ_S)
-    conn:setReadBufferSize(M.BUFFER)
+    if not conn:setReadBufferSize(M.BUFFER) then conn:setReadBufferSize(M.BUFFER_MIN) end
 
     local rec = req.rec
     local function drain()
