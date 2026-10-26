@@ -34,11 +34,10 @@ end
 
 -- ------------------------------------------------------------------- rows
 
-local function anthropicIds()
-    local ids = {}
-    for i, m in ipairs(Claude.MODELS) do ids[i] = m.id end
-    return ids
-end
+-- Anthropic's built-in list (one table, so the picker's cache keeps it
+-- prepared).
+local ANTHROPIC_IDS = {}
+for i, m in ipairs(Claude.MODELS) do ANTHROPIC_IDS[i] = m.id end
 
 -- Reads the saved lists (when the picker opens, and when a download ends).
 function S:loadLists()
@@ -58,7 +57,7 @@ function S:groups()
     for _, id in ipairs(Services.ORDER) do
         local g = { service = id, state = "ok" }
         if id == "anthropic" then
-            g.ids = anthropicIds()
+            g.ids = ANTHROPIC_IDS
         elseif ModelLists.BUILTIN[id] then
             g.ids = ModelLists.BUILTIN[id]
         else

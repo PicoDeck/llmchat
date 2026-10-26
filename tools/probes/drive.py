@@ -107,7 +107,14 @@ def main():
         sim.start()
         try:
             t = hw_target.SimTarget(sim)
-            t.push_app(HERE / which, NAMES[which], hidden=True)
+            src = HERE / which
+            if which == "lists" and os.environ.get("PROBE_OWN") != "1":  # with the app's own modules beside it
+                src = Path(tempfile.mkdtemp()) / "lists"
+                shutil.copytree(HERE / "lists", src)
+                (src / "src").mkdir()
+                for mod in ("modellists", "services", "http", "picker"):
+                    shutil.copy(HERE.parents[1] / "src" / f"{mod}.lua", src / "src")
+            t.push_app(src, NAMES[which], hidden=True)
             if which == "stop":
                 t.launch_app(NAMES["stop"]); drive_stop(t, 1.0, 1.5)
             elif which == "lists":
@@ -121,10 +128,19 @@ def main():
     else:
         import asyncio, hw_target
         port = sys.argv[3]
+        if which == "lists" and os.environ.get("PROBE_OWN") != "1":  # with the app's own modules beside it
+            staged = Path(tempfile.mkdtemp()) / "lists"
+            shutil.copytree(HERE / "lists", staged)
+            (staged / "src").mkdir()
+            for mod in ("modellists", "services", "http", "picker"):
+                shutil.copy(HERE.parents[1] / "src" / f"{mod}.lua", staged / "src")
+            HERE_PUSH = staged
+        else:
+            HERE_PUSH = HERE / which
         t = hw_target.HwTarget(port)  # not connect(): no log capture here
         pm = t.pm
         print("status", t.status())
-        out = asyncio.run(pm.push_app(str(HERE / which), NAMES[which], device=port, hidden="dev"))
+        out = asyncio.run(pm.push_app(str(HERE_PUSH), NAMES[which], device=port, hidden="dev"))
         print(out.splitlines()[0])
         try:
             delete_quiet(t, f"/data/{IDS[which]}/results.txt")

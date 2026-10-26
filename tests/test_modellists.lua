@@ -97,18 +97,24 @@ return {
 
     -- JSON escapes every quote inside a string (gateways spec 8.3).
     scan_ignores_escaped = function()
-        local body = '{"data":[{"description":"say \\"id\\":\\"fake\\" here","id":"real/a","type":"language"},'
-            .. '{"description":"ends in a backslash \\\\","id":"real/b","type":"language"},'
-            .. '{"id":"real/c","pricing":[{"type":"embedding","id":"nested"}],"type":"language"}]}'
+        local body = '{"data":[{"description":"say \\"id\\":\\"fake\\" and \\"type\\":\\"language\\"",'
+            .. '"id":"real/a","type":"language"},'
+            .. '{"id":"real/b","description":"ends in a backslash \\\\","type":"language"},'
+            .. '{"id":"real/c","description":"\\"type\\":\\"language\\"","type":"embedding"}]}'
         T.same(J.decode(body).data[2].id, "real/b")
         for size = 1, 40 do
-            T.same(scan("vercel", body, size), { "real/a", "real/b", "real/c" }, "at " .. size)
+            T.same(scan("vercel", body, size), { "real/a", "real/b" }, "at " .. size)
         end
     end,
 
-    scan_type_before_id = function()
-        local body = '{"data":[{"type":"language","id":"a/b"},{"type":"embedding","id":"a/c"}]}'
-        T.same(scan("vercel", body, 3), { "a/b" })
+    -- Gateways spec 8.3: each model has exactly one "id", first in its
+    -- entry, and no nested object has one; nested objects do have "type"s
+    -- (reasoning_options, pricing tiers), but never "language".
+    scan_vercel_language_anywhere_in_its_entry = function()
+        local body = '{"object":"list","data":[{"id":"a/b","reasoning_options":[{"type":"toggle"}],"type":"language"},'
+            .. '{"id":"a/c","type":"embedding","pricing":{"tiers":[{"type":"tiered"}]}},'
+            .. '{"id":"a/d","type":"language","pricing":{"type":"flat"}},{"id":"a/e"}]}'
+        for size = 1, 30 do T.same(scan("vercel", body, size), { "a/b", "a/d" }, "at " .. size) end
     end,
 
     scan_junk_gives_nothing = function()
@@ -117,6 +123,30 @@ return {
         T.same(scan("openrouter", "", 1), {})
         T.same(scan("openrouter", '{"data":[{"id":"a/b"},{"id":"c/', 4), { "a/b" }, "a body cut short")
         T.same(scan("openrouter", '{"data":[{"id":"a/b"},{"id":"a/b"},{"id":"bad id"}]}', 6), { "a/b" })
+    end,
+
+    -- On the device the Lua work per character is what costs: a scan that
+    -- stopped at every quote ran at ~35 KB/s there and froze the app for
+    -- seconds (gateways verify-first, device run). The scan must cost a few
+    -- searches per model, not per string.
+    scan_work_per_model = function()
+        local parts = { '{"object":"list","data":[' }
+        for i = 1, 200 do
+            local keys = {}
+            for k = 1, 30 do keys[#keys + 1] = string.format('"k%d":"v%d"', k, k) end
+            parts[#parts + 1] = string.format('%s{"id":"vendor/m-%d",%s,"reasoning_options":[{"type":"toggle"}],'
+                .. '"type":"language","pricing":{"input":"1","tiers":[{"type":"t"}]}}',
+                i > 1 and "," or "", i, table.concat(keys, ","))
+        end
+        parts[#parts + 1] = "]}"
+        local body = table.concat(parts)
+        local find, calls = string.find, 0
+        string.find = function(...) calls = calls + 1; return find(...) end
+        local ok, ids = pcall(scan, "vercel", body, 16384)
+        string.find = find
+        assert(ok, ids)
+        T.eq(#ids, 200)
+        T.ok(calls < 200 * 6, calls .. " searches for 200 models")
     end,
 
     keep_rules = function()
@@ -169,7 +199,7 @@ return {
         T.eq(#ids, 4000)
         T.eq(ids[4000], "vendor/model-4000")
         T.ok(grew < 400, string.format("grew %.0f KB", grew))
-        T.ok(maxTail <= ML.MAX_VALUE, "carried " .. maxTail .. " bytes between chunks")
+        T.ok(maxTail <= ML.MAX_VALUE + 1, "carried " .. maxTail .. " bytes between chunks")
     end,
 
     fetch_saves = function()

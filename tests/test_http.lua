@@ -59,6 +59,38 @@ return {
         T.ok(not Http.inFlight(F.pc.network))
     end,
 
+    -- The firmware runs the request callback between any two Lua statements
+    -- (its service pass is in the count hook). A count hook of 1 here runs it
+    -- between any two instructions of take(): nothing may be lost or reordered.
+    take_survives_a_callback_at_any_instruction = function()
+        -- two chunks queued: one service pass delivers the first and the
+        -- request stays open (the second is never delivered)
+        local F = setup(function() return 200, {}, { "<0>", "never" } end)
+        local req = Http.post(F.pc.network, BASE, "/p", {}, "")
+        F.service()
+        local conn = F.made[1]
+        local n, busy, got = 0, false, {}
+        local function arrive()
+            if busy then return end
+            busy = true
+            n = n + 1
+            conn.buf = conn.buf .. "<" .. n .. ">"
+            conn.cb.req()
+            busy = false
+        end
+        for _ = 1, 40 do
+            debug.sethook(arrive, "", 1)
+            local chunks = req:take()
+            debug.sethook()
+            for _, c in ipairs(chunks) do got[#got + 1] = c end
+        end
+        for _, c in ipairs(req:take()) do got[#got + 1] = c end
+        local want = { "<0>" }
+        for i = 1, n do want[#want + 1] = "<" .. i .. ">" end
+        T.ok(n > 40, "arrivals: " .. n)
+        T.eq(table.concat(got), table.concat(want))
+    end,
+
     bad_base_opens_nothing = function()
         local F = setup(function() return 200, {}, "" end)
         local req = Http.post(F.pc.network, "nonsense", "/v1", {}, "{}")

@@ -51,9 +51,39 @@ end
 local STATE_TEXT = { nokey = function() return M.NO_KEY end, getting = function() return M.GETTING end,
                      failed = function(g) return M.failed(g.err) end }
 
--- cache (optional, kept by the caller for one set of lists): when the new
--- filter only extends the last one, only the ids that matched it are tried
--- (gateways verify-first 2).
+-- Like match, for an id already lower-cased.
+local function matchLower(s, words)
+    local a, b
+    for i, w in ipairs(words) do
+        local x, y = string.find(s, w, 1, true)
+        if not x then return false end
+        if i == 1 then a, b = x, y end
+    end
+    return true, a, b
+end
+
+-- A list's full ids and their lower-case forms, made once per list table
+-- while the caller keeps the cache (on the device, making them again on every
+-- keystroke cost most of its 150-210 ms: gateways verify-first).
+local function prepared(cache, list, prefix)
+    local prep = cache and cache.prep
+    local p = prep and prep[list]
+    if p and p.prefix == prefix then return p end
+    p = { prefix = prefix, full = {}, lower = {} }
+    for i, id in ipairs(list) do
+        local full = prefix and (prefix .. id) or id
+        p.full[i], p.lower[i] = full, full:lower()
+    end
+    if cache then
+        cache.prep = prep or setmetatable({}, { __mode = "k" })
+        cache.prep[list] = p
+    end
+    return p
+end
+
+-- cache (optional, kept by the caller for one set of lists): the lists are
+-- prepared once; and when the new filter only extends the last one, only
+-- the ids that matched it are tried (gateways verify-first 2).
 function M.build(input, cache)
     local filter = input.filter or ""
     local lower = filter:lower()
@@ -62,24 +92,50 @@ function M.build(input, cache)
     local narrow = cache and cache.filter and filtering and lower:sub(1, #cache.filter) == cache.filter
         and cache.matched or nil
     local matched = {}
-    local rows, count, listed = {}, 0, {}
+    local rows, count = {}, 0
+    local typed = filter:match("^%s*(.-)%s*$")
+    local useRow = Services.valid(typed)
 
-    local function group(label, entries, right, text)
+    -- The model row for entry i of prepared list p: kept in p (so in the
+    -- cache) and reused by every build, since on the device each new table
+    -- costs a heap block (gateways verify-first).
+    local function modelRow(p, i, a, b)
+        local rs = p.rows
+        if not rs then
+            rs = {}
+            p.rows = rs
+        end
+        local r = rs[i]
+        if not r then
+            r = { kind = "model", id = p.full[i], span = {} }
+            rs[i] = r
+        end
+        r.tag, r.hl = nil, nil
+        if a then
+            r.span[1], r.span[2] = a, b
+            r.hl = r.span
+        end
+        return r
+    end
+
+    local function group(label, p, right, text)
         local found = {}
-        for _, full in ipairs(entries) do
-            listed[full] = true
+        local full, low = p and p.full or {}, p and p.lower or {}
+        for i = 1, #full do
+            local id = full[i]
+            if useRow and id == typed then useRow = false end
             if not filtering then
-                found[#found + 1] = { kind = "model", id = full }
-            elseif not narrow or narrow[full] then
-                local ok, a, b = M.match(full, words)
+                found[#found + 1] = modelRow(p, i)
+            elseif not narrow or narrow[id] then
+                local ok, a, b = matchLower(low[i], words)
                 if ok then
-                    matched[full] = true
-                    found[#found + 1] = { kind = "model", id = full, hl = { a, b } }
+                    matched[id] = true
+                    found[#found + 1] = modelRow(p, i, a, b)
                 end
             end
         end
         if filtering and #found == 0 then return end
-        if not filtering and #entries == 0 and not text then return end
+        if not filtering and #full == 0 and not text then return end
         local r = right
         if filtering then r = label == "Recent" and "" or tostring(#found) end
         rows[#rows + 1] = { kind = "group", label = label, right = r }
@@ -91,24 +147,18 @@ function M.build(input, cache)
         end
     end
 
-    group("Recent", input.recent or {}, "")
+    group("Recent", prepared(cache, input.recent or {}, nil), "")
     for _, g in ipairs(input.groups or {}) do
-        local entries = {}
-        if g.state ~= "nokey" then
-            for _, id in ipairs(g.ids or {}) do entries[#entries + 1] = g.service .. "/" .. id end
-        end
+        local p = g.state ~= "nokey" and g.ids and prepared(cache, g.ids, g.service .. "/") or nil
         local text = STATE_TEXT[g.state] and STATE_TEXT[g.state](g)
         local right = ""
         if g.state ~= "nokey" and g.ids then
-            right = (g.age and (g.age .. "  ") or "") .. #entries
+            right = (g.age and (g.age .. "  ") or "") .. #g.ids
         end
-        group(Services.label(g.service), entries, right, text)
+        group(Services.label(g.service), p, right, text)
     end
 
-    local typed = filter:match("^%s*(.-)%s*$")
-    if Services.valid(typed) and not listed[typed] then
-        table.insert(rows, 1, { kind = "use", id = typed })
-    end
+    if useRow then table.insert(rows, 1, { kind = "use", id = typed }) end
     if cache then cache.filter, cache.matched = filtering and lower or nil, filtering and matched or nil end
     return rows, count
 end

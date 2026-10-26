@@ -2,7 +2,7 @@
 
 Date: 2026-10-26. Answers the five questions in section 11 of the gateways spec (`docs/superpowers/specs/2026-10-26-llmchat-gateways-design.md`), before code depends on them.
 
-**The device run is still to do.** The PicoCalc wasn't plugged in when these were measured, so questions 1, 2 and 5 were answered in the simulator only. Their decisions below are provisional, and two are deliberately the cautious choice. The device probe (`tools/probes/drive.py hw lists <port>`) runs with the owner's go-ahead alongside the final device checks (plan Task 12). If it changes a decision, this document gets a dated addition.
+**Device run, 2026-10-26 (later the same day):** see "On the device" at the end. It changed two things in the app: the list scanner (a pattern scan now) and the picker's filter (lists prepared once), and found a chunk-handover race in `src/http.lua`. The decisions at the end are updated to the device's figures.
 
 Tools:
 - `tools/probes/cc.py`: one streaming Chat Completions request. It sends the firmware's `User-Agent: PicoDeck/1.0` and no `max_tokens`.
@@ -85,3 +85,46 @@ TWO_CONNECTIONS = no        (cautious until the device run: list downloads wait 
 
 - `FILTER_MS` doesn't trigger the plan's incremental filter, but the device figure isn't known. Task 9 narrows the previous result when the filter only grew, so the device needn't be measured first.
 - `TWO_CONNECTIONS = no` costs little: a download waits for the reply in progress to end, and its group shows "Getting the model list..." meanwhile. If the device copes, it can be relaxed later.
+
+## On the device (2026-10-26, the owner's PicoCalc over USB)
+
+`tools/probes/drive.py hw lists /dev/ttyACM0`, the probe staged with the app's own `src/modellists.lua`, `services.lua`, `http.lua` and `picker.lua` so it measures the app's scanner and filter. The launcher brings WiFi up for an app with the `http` requirement (about 4.5 s from a cold start); the probe waits for it and for the clock.
+
+**First run, with the scanner as built (a small streaming JSON scanner that followed every string):**
+
+| list | bytes read | bytes scanned | ids | time | fps | longest frame | lowest free |
+|---|---|---|---|---|---|---|---|
+| Vercel | 543,819 | 524,288 | 251 of 269 | 15.4 s | 3 | 7.7 s | 4.99 MB |
+| OpenRouter | 791,575 | 674,771 | 314 of 393 | 22.9 s | 14 | 8.2 s | 4.85 MB |
+
+- The scanner was CPU-bound at about 35 KB/s: on the device, Lua work per character is what costs. Each frame scanned everything that had arrived since the last, so frames ran for seconds and the backlog piled up in the Lua heap. That is `LISTS_OK = no` by this document's own test (under 5 fps).
+- Bytes went missing between the HTTP callbacks and the scanner. That was the probe's own pump (it read "done" after a scan that the complete callback could interrupt), but the hunt found a real race in `src/http.lua` too: `Req:take` reset the chunk counter and the list in one multiple assignment, which Lua stores counter first, so a callback between the two stores (the firmware runs callbacks between any two Lua statements) overwrote a chunk not yet taken and hid the next batch behind a hole. It could drop text from a streaming reply. Fixed: the callback appends to whatever list is current, and `take` swaps the list in one store (`take_survives_a_callback_at_any_instruction`).
+- The picker's filter took 150-210 ms a keystroke over 516-565 ids: it joined and lower-cased every id again on each keystroke.
+- For comparison, the probe's own pattern scan: Vercel 4.8 s at 39 fps (longest frame 118 ms), OpenRouter 12.1 s at 45 fps, every byte; its plain filter 33-80 ms over 947 ids.
+
+**After the fixes** (the scanner a pattern scan, a few `string.find` calls per model, `scan_work_per_model`; the picker preparing each list's full and lower-case ids once and reusing its row tables, `keystroke_reuses_the_prepared_lists`):
+
+| list | bytes | ids | time | fps | longest frame | lowest free |
+|---|---|---|---|---|---|---|
+| Vercel | 543,819 (all) | 269 | 5.2 s | 28 | 151 ms | 5.44 MB |
+| OpenRouter | 791,577 (all) | 393 | 11.7 s | 42 | 144 ms | 5.45 MB |
+| both at once | all | 269 + 393 | 15.6 s | 32 | | 5.19 MB |
+
+| filter, over all 662 ids (the first keystroke; later ones narrow the last result) | ms per keystroke |
+|---|---|
+| `f` (160 matches) | 71.5 |
+| `flash` (78) | 39.7 |
+| `ds flash` (0) | 25.2 |
+
+- Free PSRAM at the probe's start: 5.80 MB.
+- OpenRouter twice answered a download with "Mongoose error: peer RST" (once alone, once beside Vercel's), after many back-to-back downloads of its list. The picker shows "Couldn't get the list: Mongoose error: peer RST. F2 tries again."; F2 then works.
+
+## Decisions (device)
+
+```
+LISTS_OK = yes              (device: both lists complete, 28-42 fps, longest frame ~150 ms)
+FILTER_MS = 72              (device: first keystroke over 662 ids; above 50, so the filter narrows the last result, as built)
+MAX_TOKENS = omit
+EFFORT_REJECTED = opencode on mistral-large-4: HTTP 400 for effort low and medium. Rule: a CC request that carried an effort field and got HTTP 400 is retried once without it.
+TWO_CONNECTIONS = yes       (device: two lists at once, complete, 32 fps). The fetcher still waits for a reply in progress, so the reply keeps the frame time.
+```

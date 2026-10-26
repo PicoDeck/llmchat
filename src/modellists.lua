@@ -6,19 +6,16 @@ local Http = require("src.http")
 
 local M = {}
 
--- Gateways verify-first (docs/research/2026-10-26-gateways-verify-first.md):
--- LISTS_OK = yes, so no service needs a built-in list instead; and
--- TWO_CONNECTIONS = no, so a list waits while a reply arrives.
+-- Gateways verify-first (docs/research/2026-10-26-gateways-verify-first.md,
+-- measured on the device): LISTS_OK = yes, so no service needs a built-in
+-- list instead. The device does download two lists at once, but a list still
+-- waits while a reply arrives, so the reply keeps the frame time.
 M.BUILTIN = {}
 M.TWO_CONNECTIONS = false
 
--- The longest id or type the scanner keeps; a longer value is dropped (no
--- full id is over 120 characters), so it carries at most this much from one
--- chunk to the next.
-M.MAX_VALUE = 200
-
--- The list entries: {"data": [ {entry}, ... ]}.
-local ENTRY_DEPTH = 3
+-- The most the scanner carries from one chunk to the next: more than any
+-- "id":"<value>" it keeps (no full id is over 120 characters).
+M.MAX_VALUE = 256
 
 -- OpenCode's Chat Completions families (spec 8.1); the rest of its list is
 -- served through other APIs.
@@ -42,102 +39,81 @@ function M.keep(serviceId, id, kind)
     return false
 end
 
--- A JSON scanner just deep enough for the lists (spec 8.3). It follows the
--- nesting and the strings (an escaped quote never ends one) by jumping from
--- one structural character to the next, and keeps only the "id" and "type"
--- of each entry, so memory is the kept ids plus at most MAX_VALUE carried
--- between chunks. sc:feed(chunk); sc:finish() -> kept ids in list order,
--- without repeats; sc.tailLen: the bytes carried after the last feed.
+-- The list scanner (spec 8.3): it searches each chunk for the entries'
+-- "id"s with string.find, a few searches per model, and keeps only the ids
+-- (on the device, a scan that followed every string ran at ~35 KB/s and froze
+-- the app for seconds: docs/research/2026-10-26-gateways-verify-first.md).
+-- What makes that safe (spec 3): JSON escapes every quote inside a string,
+-- so an unescaped "id": is always a key; each list has exactly one "id" per
+-- model, first in its entry, and no nested object has one; ids count only
+-- after "data":[ (an error body has none). Vercel's chat models are the
+-- entries with "type":"language" before the next id (nested objects have
+-- "type"s too, never "language"). sc:feed(chunk); sc:finish() -> the kept ids
+-- in list order, without repeats; sc.tailLen: the bytes carried after the
+-- last feed (at most MAX_VALUE + 1).
+local DATA = '"data"%s*:%s*%['
+local ID = '"id"%s*:%s*"([^"\\]*)"'
+local LANGUAGE = '"type"%s*:%s*"language"'
+
 function M.scanner(serviceId)
     local sc = { tailLen = 0 }
-    local depth, inStr, esc, afterColon, isKey = 0, false, false, false, false
-    local capturing, cap, capLen, bad = false, {}, 0, false
-    local curKey, entryId, entryType
+    local tail, inData = "", false
     local ids, seen = {}, {}
+    local pending, pendingLang = nil, false
+    local vercel = serviceId == "vercel"
 
-    local function add(s)
-        if bad then return end
-        capLen = capLen + #s
-        if capLen > M.MAX_VALUE then
-            bad, cap = true, {}
-        else
-            cap[#cap + 1] = s
+    local function settle()
+        if pending and not seen[pending]
+            and M.keep(serviceId, pending, vercel and (pendingLang and "language" or "other") or nil) then
+            seen[pending] = true
+            ids[#ids + 1] = pending
         end
+        pending, pendingLang = nil, false
     end
 
-    local function endEntry()
-        if entryId and not seen[entryId] and M.keep(serviceId, entryId, entryType) then
-            seen[entryId] = true
-            ids[#ids + 1] = entryId
-        end
-        entryId, entryType, curKey = nil, nil, nil
-    end
+    -- A match at a counts unless a backslash comes before it (escaped).
+    local function real(s, a) return a == 1 or s:byte(a - 1) ~= 92 end
 
-    -- A string at entry depth ended: text is what it said, or nil when it
-    -- was not kept (too long, or an escape in it: no valid id has one).
-    local function stringDone(text)
-        if isKey then
-            curKey = text
-        else
-            if curKey == "id" then entryId = text elseif curKey == "type" then entryType = text end
-            curKey = nil
+    function sc:feed(chunk)
+        local s = tail .. chunk
+        local pos = 1
+        while not inData do
+            local a, b = s:find(DATA, pos)
+            if not a then break end
+            if real(s, a) then inData = true end
+            pos = b + 1
         end
-    end
-
-    function sc:feed(s)
-        local pos, n = 1, #s
-        if esc then -- the character after a backslash that ended the last chunk
-            esc = false
-            pos = 2
-        end
-        while pos <= n do
-            if inStr then
-                local i = s:find('["\\]', pos)
-                if not i then
-                    if capturing then add(s:sub(pos)) end
+        if inData then
+            local a, b, id = s:find(ID, pos)
+            local la, lb
+            while true do
+                if vercel and pending and not pendingLang and (not la or la < pos) then
+                    la, lb = s:find(LANGUAGE, pos)
+                end
+                if la and la >= pos and (not a or la < a) then
+                    if real(s, la) then pendingLang = true end
+                    pos = lb + 1
+                elseif a then
+                    if real(s, a) then
+                        settle()
+                        pending = id
+                    end
+                    pos = b + 1
+                    a, b, id = s:find(ID, pos)
+                else
                     break
                 end
-                if capturing and i > pos then add(s:sub(pos, i - 1)) end
-                if s:byte(i) == 92 then -- \: skip the escaped character
-                    if capturing then bad = true end
-                    if i == n then esc = true end
-                    pos = i + 2
-                else
-                    inStr = false
-                    if depth == ENTRY_DEPTH then
-                        stringDone(capturing and not bad and table.concat(cap) or nil)
-                    end
-                    capturing, cap, capLen, bad = false, {}, 0, false
-                    pos = i + 1
-                end
-            else
-                local i = s:find('["{}%[%]:,]', pos)
-                if not i then break end
-                local c = s:byte(i)
-                if c == 34 then -- "
-                    inStr, isKey, afterColon = true, not afterColon, false
-                    capturing = depth == ENTRY_DEPTH and (isKey or curKey == "id" or curKey == "type")
-                elseif c == 123 or c == 91 then -- { [
-                    depth = depth + 1
-                    afterColon = false
-                    if depth == ENTRY_DEPTH then entryId, entryType, curKey = nil, nil, nil end
-                elseif c == 125 or c == 93 then -- } ]
-                    if depth == ENTRY_DEPTH and c == 125 then endEntry() end
-                    depth = depth - 1
-                    afterColon = false
-                    if depth == ENTRY_DEPTH then curKey = nil end -- a nested value ended
-                elseif c == 58 then -- :
-                    afterColon = true
-                else -- ,
-                    afterColon = false
-                end
-                pos = i + 1
             end
         end
-        self.tailLen = capLen
+        -- Carry what may hold an unfinished match, and the byte before it
+        -- (an escape's backslash).
+        local from = math.max(pos, #s - M.MAX_VALUE + 1)
+        tail = s:sub(math.max(1, from - 1))
+        self.tailLen = #tail
     end
 
     function sc:finish()
+        settle()
         seen = nil
         return ids
     end

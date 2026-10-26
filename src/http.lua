@@ -80,19 +80,22 @@ function Req:poll()
     end
 end
 
--- Body chunks received since the last call (never empty strings).
+-- Body chunks received since the last call (never empty strings). The
+-- swap is one store: a callback that runs before it appends to the list
+-- returned, one after it to the new list (with a separate counter reset, a
+-- callback between the two stores overwrote a chunk not yet taken).
 function Req:take()
     self:poll()
     local rec = self.rec
     local out = rec.chunks
-    rec.chunks, rec.n = {}, 0
+    rec.chunks = {}
     return out
 end
 
 function Req:cancel()
     if self.state ~= "sending" and self.state ~= "streaming" then return end
     self.state = "cancelled"
-    self.rec.chunks, self.rec.n = {}, 0
+    self.rec.chunks = {}
     local conn = self.conn
     self.conn = nil
     if conn then
@@ -105,7 +108,7 @@ end
 local function request(net, base, method, path, headers, body)
     local req = setmetatable({
         state = "sending",
-        rec = { chunks = {}, n = 0 },
+        rec = { chunks = {} },
     }, Req)
     local b = M.parseBase(base)
     if not b then
@@ -130,8 +133,8 @@ local function request(net, base, method, path, headers, body)
             local d = conn:read(READ_CHUNK)
             if not d then break end
             if d ~= "" then -- a boundary read can come back empty
-                rec.n = rec.n + 1
-                rec.chunks[rec.n] = d
+                local t = rec.chunks
+                t[#t + 1] = d
             end
         end
         if not rec.status then

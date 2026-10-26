@@ -207,6 +207,37 @@ return {
         T.ok(ms < 20, string.format("%.1f ms", ms))
     end,
 
+    -- On the device a keystroke over ~700 ids took 150-210 ms while every id
+    -- was joined and lower-cased again each time (gateways verify-first,
+    -- device run): with a cache, a list is prepared once and a keystroke only
+    -- searches.
+    keystroke_reuses_the_prepared_lists = function()
+        local inp = input()
+        local ids = {}
+        for i = 1, 800 do ids[i] = "Vendor/Model-" .. i end
+        inp.groups[3].ids = ids
+        local cache = {}
+        inp.filter = "model-1"
+        Picker.build(inp, cache)
+        local lower, upper, calls = string.lower, string.upper, 0
+        string.lower = function(...) calls = calls + 1; return lower(...) end
+        inp.filter = "vendor/model-7" -- not an extension of the last filter
+        local ok, rows = pcall(Picker.build, inp, cache)
+        string.lower = lower
+        assert(ok, rows)
+        T.ok(calls <= 4, calls .. " lower-casings for one keystroke")
+        T.eq(#models(rows), 111, "vendor/model-7, -70..79, -700..799")
+        T.eq(rows[2].id, "openrouter/Vendor/Model-7")
+        T.same(rows[2].hl, { 12, 25 })
+        -- a row is the same table from one keystroke to the next (on the device
+        -- every new table costs a heap block)
+        inp.filter = "model-7"
+        local again = Picker.build(inp, cache)
+        T.ok(rawequal(again[2], rows[2]), "a new row table")
+        T.same(again[2].hl, { 19, 25 })
+        T.eq(again[2].tag, nil)
+    end,
+
     -- Gateways verify-first 2: a filter that only grew narrows the last
     -- result instead of every id.
     narrowing_uses_the_last_result = function()
