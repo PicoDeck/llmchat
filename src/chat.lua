@@ -265,19 +265,19 @@ function Chat:send(text)
     end
     self.items[#self.items + 1] = { role = "user", text = text }
     self:_bump()
-    self:_start()
-    -- Recent (gateways spec 9.1), written once the request is on its way and
-    -- only when this model wasn't first already: no card write ahead of the
-    -- first words.
+    -- Saved before the request goes out, while the card can run at full
+    -- speed: once a reply is on its way every write runs in slow mode, and
+    -- one there kept the app from reading for seconds while a gateway's
+    -- stream filled the firmware's buffer. Recent (gateways spec 9.1) only
+    -- when this model wasn't first already; the chat so that a reply that
+    -- never finishes doesn't take the question with it.
     local store = self.deps.store
     if store:prefs().recent[1] ~= full then
         store:pushRecent(full)
         store:savePrefs()
     end
-    -- On the card while its reply arrives (after the request is on its way,
-    -- so the save adds no wait before the first words): a reply that never
-    -- finishes doesn't take the question with it.
-    if self.state ~= "idle" then self:_persist() end
+    self:_persist()
+    self:_start()
     return true
 end
 

@@ -9,6 +9,7 @@ local Services = require("src.services")
 local CC = require("src.providers.cc")
 local claude = require("src.providers.claude")
 local J = require("tests.json")
+local Http = require("src.http")
 
 local D = "/data/net.picodeck.llmchat"
 
@@ -105,6 +106,20 @@ end
 -- streaming request and <service>-title.json for a title request.
 local ROUTES = { ["/v1/messages"] = "claude", ["/v1/chat/completions"] = "vercel",
                  ["/inference/openai/v1/chat/completions"] = "opencode" }
+-- Every file the app opens for writing, with how many requests had gone out
+-- by then and whether the card was in slow mode.
+local function recordWrites(F)
+    local seen = {}
+    local open = F.pc.fs.open
+    F.pc.fs.open = function(path, mode)
+        if type(mode) == "string" and mode:find("[wa]") then
+            seen[#seen + 1] = { path = path, requests = #F.requests, slow = F.slowMode }
+        end
+        return open(path, mode)
+    end
+    return seen
+end
+
 local function byPath(case)
     return function(_, p, _, body)
         local svc = ROUTES[p]
@@ -172,9 +187,32 @@ return {
         T.eq(#saved.items, 1)
         T.eq(saved.items[1].role, "user")
         T.eq(saved.items[1].text, "keep me")
-        T.eq(#F.requests, 1, "the request went out first")
+        T.eq(#F.requests, 1, "the request went out")
         run(F, chat)
         T.eq(#store:loadChat(chat.id).items, 2)
+    end,
+
+    -- The send-time saves (the chat, Recent) are made before the request
+    -- goes out, at the card's full speed: once a reply streams in, the card
+    -- runs in slow mode, and a write there kept the app from reading for
+    -- seconds while a gateway's stream filled the firmware's buffer.
+    send_saves_before_the_request_at_full_speed = function()
+        local F, chat, store = setup({ model = "vercel/google/gemini-3.8-flash", responder = byPath() })
+        store.radioBusy = function() return Http.inFlight(F.pc.network) end
+        local seen = recordWrites(F)
+        chat:open(nil)
+        T.eq(chat:send("hi"), true)
+        T.eq(#F.requests, 1)
+        local paths = {}
+        for _, w in ipairs(seen) do
+            paths[#paths + 1] = w.path
+            T.eq(w.requests, 0, w.path .. " written after the request went out")
+            T.eq(w.slow, false, w.path .. " written in slow mode")
+        end
+        local all = table.concat(paths, " ")
+        T.ok(all:find("prefs.json", 1, true), "Recent saved: " .. all)
+        T.ok(all:find("/chats/", 1, true), "the chat saved: " .. all)
+        run(F, chat)
     end,
 
     -- Final review M3: a partial reply that is only whitespace is not kept
@@ -693,10 +731,9 @@ return {
         run(F, chat)
     end,
 
-    -- The prefs write for Recent waits until the request is on its way (no
-    -- card write before the first words), and is skipped when the model is
-    -- already first.
-    recent_saved_after_the_request_and_only_on_change = function()
+    -- The prefs write for Recent is made before the request goes out (at the
+    -- card's full speed), and is skipped when the model is already first.
+    recent_saved_before_the_request_and_only_on_change = function()
         local F, chat, store = setup({ model = "vercel/google/gemini-3.8-flash", responder = byPath() })
         local writes = {}
         local open = F.pc.fs.open
@@ -708,7 +745,7 @@ return {
         chat:send("hi")
         T.eq(store:prefs().recent[1], "vercel/google/gemini-3.8-flash")
         T.ok(#writes >= 1, "Recent saved")
-        for _, n in ipairs(writes) do T.ok(n >= 1, "prefs written before the request went out") end
+        for _, n in ipairs(writes) do T.eq(n, 0, "prefs written after the request went out") end
         run(F, chat)
         writes = {}
         chat:send("again")

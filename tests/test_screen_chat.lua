@@ -452,10 +452,12 @@ return {
         T.ok(rawequal(err, exit), "the exit was swallowed")
     end,
 
-    -- S1: the save at send happens with the request already on its way, so
-    -- the app's store writes it in slow mode; the save once the reply is in
-    -- (its request closed) runs at full speed, and the bus ends at full speed.
-    send_save_in_slow_mode = function()
+    -- The save at send happens before the request goes out, so the app's
+    -- store writes it at full speed (a slow-mode write while a gateway's
+    -- stream arrived kept the app from reading for seconds); the save once
+    -- the reply is in (its request closed) runs at full speed too, and the
+    -- bus ends at full speed.
+    send_save_at_full_speed = function()
         local F, app = setup()
         local writes = {}
         local write = F.pc.fs.write
@@ -466,7 +468,7 @@ return {
             return write(h, s)
         end
         sendText(F, app, "hello")
-        T.same(writes, { true }, "the save at send")
+        T.same(writes, { false }, "the save at send")
         T.ok(waitFor(app, function() return app.chat.state == "idle" end), "the reply finished")
         T.eq(writes[2], false, "the save once the reply is in")
         T.eq(F.slowMode, false, "left in slow mode")
