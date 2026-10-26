@@ -15,3 +15,19 @@ Written by tools/record_stream.py, a row per request. An error reply is not bill
 | gateway probe: bad key x3 | 401 | - | 0 | 0 | $0.0000 |
 | gateway probe: vercel | 200 | minimax/minimax-m3.1-flash | 208 | 46 | $0.0000 |
 | gateway probe: vercel | 200 | google/gemini-3.8-flash | 14 | 28 | $0.0001 |
+| probe opencode long effort=low | 403 | deepseek-v4.1-flash | 0 | 0 | $0.0000 |
+| probe vercel long effort=low | 200 | google/gemini-3.8-flash | 38 | 3313 | $0.0125 |
+| probe vercel long effort=low | 200 | deepseek/deepseek-v4.1-flash-1017 | 62 | 6155 | $0.0000 |
+| probe vercel long effort=low | 200 | minimax/minimax-m3.1-flash | 226 | 5979 | $0.0036 |
+| probe opencode long effort=low | 200 | deepseek-v4.1-flash | 62 | 7072 | $0.0085 |
+| probe vercel effort=low | 200 | mistral/mistral-small | 37 | 30 | $0.0000 |
+| probe vercel effort=low | 200 | amazon/nova-micro | 20 | 14 | $0.0000 |
+| probe opencode effort=low | 400 | mistral-large-4 | 0 | 0 | $0.0000 |
+| probe opencode effort=none | 200 | mistral-large-4 | 25 | 414 | $0.0009 |
+| probe opencode effort=medium | 400 | mistral-large-4 | 0 | 0 | $0.0000 |
+| probe opencode effort=high | 200 | mistral-large-4 | 25 | 403 | $0.0009 |
+| probe opencode effort=low | 200 | glm-5.3-flash | 33 | 33 | $0.0000 |
+| probe opencode effort=low | 403 | kimi-k3 | 0 | 0 | $0.0000 |
+| probe opencode effort=low | 200 | minimax-m3 | 138 | 54 | $0.0001 |
+| probe opencode effort=low | 200 | qwen3.8-max | 61 | 59 | $0.0005 |
+| probe opencode effort=low | 200 | deepseek-v4-pro | 24 | 43 | $0.0002 |

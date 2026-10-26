@@ -4,6 +4,8 @@
   python3 tools/probes/drive.py sim stop
   python3 tools/probes/drive.py hw stop  <serial-port>
   python3 tools/probes/drive.py hw json <serial-port>
+  python3 tools/probes/drive.py sim lists
+  python3 tools/probes/drive.py hw lists <serial-port>
 
 Needs the picodeck checkout (PICODECK, default ~/Projects/PicoDeck/picodeck).
 The device is driven without log capture in this process (it loses injected
@@ -15,8 +17,9 @@ from pathlib import Path
 PICODECK = Path(os.environ.get("PICODECK", Path.home() / "Projects/PicoDeck/picodeck"))
 sys.path.insert(0, str(PICODECK / "tests/e2e"))
 HERE = Path(__file__).resolve().parent
-IDS = {"stop": "dev.llmchat.probe.stop", "json": "dev.llmchat.probe.json"}
-NAMES = {"stop": "stopprobe", "json": "jsonprobe"}
+IDS = {"stop": "dev.llmchat.probe.stop", "json": "dev.llmchat.probe.json",
+       "lists": "dev.llmchat.probe.lists"}
+NAMES = {"stop": "stopprobe", "json": "jsonprobe", "lists": "listsprobe"}
 
 
 def results(t, which):
@@ -107,6 +110,9 @@ def main():
             t.push_app(HERE / which, NAMES[which], hidden=True)
             if which == "stop":
                 t.launch_app(NAMES["stop"]); drive_stop(t, 1.0, 1.5)
+            elif which == "lists":
+                t.launch_app(NAMES[which]); wait_line(t, which, "done", 300)
+                print("RESULTS:", results(t, which))
             else:
                 t.launch_app(NAMES[which]); time.sleep(3); print(results(t, which))
         finally:
@@ -125,6 +131,9 @@ def main():
             print("launch", t.command(f"launch .dev/{NAMES[which]}", timeout=10.0))
             if which == "stop":
                 drive_stop(t, 9, 5)
+            elif which == "lists":
+                wait_line(t, which, "done", 300)
+                print("RESULTS:", results(t, which))
             else:
                 time.sleep(10); print("RESULTS:", results(t, "json"))
         finally:

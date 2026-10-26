@@ -1,0 +1,9 @@
+{
+  "id": "dev.llmchat.probe.lists",
+  "name": "Lists probe",
+  "description": "Throwaway probe: download and scan the gateways' model lists; filter timing; two connections at once.",
+  "version": "0.0.1",
+  "author": "PicoDeck",
+  "category": "tools",
+  "requirements": ["http"]
+}
