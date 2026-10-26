@@ -1,0 +1,50 @@
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"role":"assistant","content":""}}]}
+
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"reasoning_content":"We"}}]}
+
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"reasoning_content":" need answer one"}}]}
+
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"reasoning_content":" sentence concise. Explain Rayleigh"}}]}
+
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"reasoning_content":" scattering. Need mention"}}]}
+
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"reasoning_content":" shorter"}}]}
+
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"reasoning_content":" wavelengths"}}]}
+
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"reasoning_content":" scatter more"}}]}
+
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"reasoning_content":". Final."}}]}
+
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"content":"The sky"}}]}
+
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"content":" is blue because air"}}]}
+
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"content":" molecules scatter shorter"}}]}
+
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"content":" blue"}}]}
+
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"content":" wavelengths of"}}]}
+
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"content":" sunlight much"}}]}
+
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"content":" more strongly"}}]}
+
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"content":" than longer"}}]}
+
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"content":" red"}}]}
+
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"content":" wavelengths, filling"}}]}
+
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"content":" the sky"}}]}
+
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"content":" with scattered"}}]}
+
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"content":" blue light."}}]}
+
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":"stop","logprobs":null,"delta":{}}]}
+
+data: {"id":"<id>","object":"chat.completion.chunk","created":1792968276,"model":"deepseek-v4.1-flash","choices":[],"usage":{"prompt_tokens":44,"completion_tokens":51,"total_tokens":95,"cache_read_input_tokens":0,"completion_tokens_details":{"reasoning_tokens":20},"cost":0.0000744,"opencode":{"billing_source":"balance","list_cost":0.0000744,"tokens":{"input":44,"output":51,"reasoning":20,"cache_read":0,"cache_write_5m":0,"cache_write_1h":0}}}}
+
+data: [DONE]
+
