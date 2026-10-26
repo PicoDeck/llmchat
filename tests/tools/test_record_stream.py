@@ -28,7 +28,7 @@ def offline(tmp_path, monkeypatch):
 
 def keys_file(path, mode):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("claude=%s\nopenai=sk-test-9876543210\n" % KEY)
+    path.write_text("claude=%s\nvercel=vk-test-9876543210\n" % KEY)
     path.chmod(mode)
     return str(path)
 
@@ -49,7 +49,7 @@ def test_load_key_message_names_the_path_to_chmod(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(rs, "KEYS", keys_file(tmp_path / ".config" / "llmchat" / "keys.txt", 0o644))
     with pytest.raises(SystemExit) as e:
-        rs.load_key("openai")
+        rs.load_key("vercel")
     assert "chmod 600 ~/.config/llmchat/keys.txt" in str(e.value)
     assert "sk-" not in str(e.value)
 
@@ -142,9 +142,9 @@ def test_dry_run_reads_no_key_and_sends_nothing(monkeypatch, capsys):
     def no_key(provider):
         raise AssertionError("--dry-run read a key")
     monkeypatch.setattr(rs, "load_key", no_key)
-    rs.main(["openai", "reasoning", "--dry-run"])
+    rs.main(["vercel", "reasoning", "--dry-run"])
     out = capsys.readouterr().out
-    assert out.startswith("POST https://api.openai.com/v1/responses")
+    assert out.startswith("POST https://ai-gateway.vercel.sh/v1/chat/completions")
     assert "Bearer <key>" in out
     assert not os.path.exists(rs.SPEND)
 

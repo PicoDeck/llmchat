@@ -1,3 +1,0 @@
-: provisional, hand-written from api-facts.md; replace by tools/record_stream.py
-#status 401
-{"error":{"message":"Incorrect API key provided: bad-key.","type":"invalid_request_error","param":null,"code":"invalid_api_key"}}

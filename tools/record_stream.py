@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Record a real API reply as a test fixture.
 
-    tools/record_stream.py <anthropic|opencode|openrouter|vercel|openai> <case> [--dry-run]
+    tools/record_stream.py <anthropic|opencode|openrouter|vercel> <case> [--dry-run]
 
 Cases:
   anthropic (or claude): text, thinking, maxtokens, title, 401.
   opencode, openrouter, vercel (Chat Completions): text, reasoning, length,
     title, 401.
-  openai: text, reasoning, incomplete, title, 401.
 
 Keys are read only from ~/.config/llmchat/keys.txt, one `name=value` line per
 service (the Anthropic key is the `claude=` line), and are never printed; a
@@ -48,7 +47,6 @@ MATH = "What is 17*23? Think it through."
 PRICES = {
     "claude-opus-5-5": (4, 20), "claude-sonnet-5-5": (2, 10),
     "claude-haiku-5-5": (0.10, 0.50), "claude-fable-5-1": (10, 50),
-    "gpt-6-luna": (0.10, 0.50), "gpt-6.1-sol": (2, 10), "gpt-6-astra": (10, 50),
 }
 
 
@@ -81,27 +79,6 @@ def claude_request(case):
     return url, headers, body
 
 
-def openai_request(case):
-    url = "https://api.openai.com/v1/responses"
-    headers = {"Authorization": "Bearer <key>", "Content-Type": "application/json"}
-    body = {"model": "gpt-6-luna", "instructions": SYSTEM,
-            "input": [{"role": "user", "content": QUESTION}],
-            "stream": True, "store": False, "max_output_tokens": 32000,
-            "reasoning": {"effort": "none"},
-            "stream_options": {"include_obfuscation": False}}
-    if case == "reasoning":
-        body["reasoning"] = {"effort": "medium"}
-        body["input"] = [{"role": "user", "content": MATH}]
-    elif case == "incomplete":
-        body["max_output_tokens"] = 20
-    elif case == "title":
-        body = {"model": "gpt-6-luna", "input": [{"role": "user", "content": TITLE_PROMPT}],
-                "store": False, "max_output_tokens": 64, "reasoning": {"effort": "none"}}
-    elif case == "401":
-        body["max_output_tokens"] = 20
-    elif case != "text":
-        raise SystemExit("unknown openai case: " + case)
-    return url, headers, body
 
 
 # Chat Completions gateways (gateways spec 4, 6.1): URL, effort field, model.
@@ -150,9 +127,7 @@ def build(provider, case):
         return claude_request(case)
     if provider in GATEWAYS:
         return cc_request(provider, case)
-    if provider == "openai":
-        return openai_request(case)
-    raise SystemExit("service must be anthropic, opencode, openrouter, vercel or openai")
+    raise SystemExit("service must be anthropic, opencode, openrouter or vercel")
 
 
 def shown(path):
@@ -181,9 +156,9 @@ def load_key(provider):
     raise SystemExit("no %s key in %s" % (provider, KEYS))
 
 
-# An id is its prefix and letters and digits, a digit among them (OpenAI's
-# rs_, fc_ and item_ ids as well): the API's own names that start the same
-# way, such as item_id and item_reference, have none.
+# An id is its prefix and letters and digits, a digit among them (rs_, fc_
+# and item_ ids, from the old OpenAI recordings, as well): the API's own
+# names that start the same way, such as item_id and item_reference, have none.
 ID = re.compile(r"\b(msg|resp|req|rs|fc|item)_(?=[A-Za-z0-9]*[0-9])[A-Za-z0-9]+")
 # Chat Completions chunk ids, and Vercel's routing ids.
 CC_ID = re.compile(r"\b(chatcmpl|gen)-[A-Za-z0-9_\-]+")

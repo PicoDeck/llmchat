@@ -5,15 +5,12 @@ local Fixture = require("tests.fixture")
 local SSE_FILES = {
     "claude-text", "claude-thinking", "claude-maxtokens", "claude-refusal.hand",
     "claude-fallback.hand", "claude-error.hand",
-    "openai-text", "openai-reasoning", "openai-incomplete", "openai-refusal.hand",
-    "openai-failed.hand", "openai-error.hand",
     "vercel-text", "vercel-reasoning", "vercel-length",
     "opencode-text", "opencode-reasoning", "opencode-length",
     "openrouter-text.hand", "openrouter-error.hand",
 }
 local JSON_FILES = {
-    { "claude-title", 200 }, { "claude-401", 401 }, { "openai-title", 200 },
-    { "openai-401", 401 }, { "openai-quota.hand", 429 },
+    { "claude-title", 200 }, { "claude-401", 401 },
     { "vercel-title", 200 }, { "vercel-401", 401 }, { "opencode-title", 200 },
     { "opencode-401", 401 }, { "openrouter-401", 401 },
 }
@@ -44,13 +41,6 @@ return {
             T.eq(table.concat(Fixture.chunks("claude-text.sse", size)), body)
         end
         T.eq(#Fixture.chunks("claude-text.sse", 1), #body)
-    end,
-    big_completed_line = function()
-        local found = false
-        for _, ev in ipairs(Fixture.events("openai-text.sse")) do
-            if ev.name == "response.completed" and #ev.data > 65536 then found = true end
-        end
-        T.ok(found, "a response.completed data line over 64 KB")
     end,
     no_keys = function()
         for _, name in ipairs(SSE_FILES) do

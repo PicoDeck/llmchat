@@ -1,7 +1,7 @@
 {
   "id": "net.picodeck.llmchat",
   "name": "LLM Chat",
-  "description": "Chat with Claude and OpenAI models, and have them write Lua programs you can run on the spot.",
+  "description": "Chat with Claude and the models on OpenCode, OpenRouter and Vercel, and have them write Lua programs you can run on the spot.",
   "version": "2.0.0",
   "author": "PicoDeck",
   "category": "network",

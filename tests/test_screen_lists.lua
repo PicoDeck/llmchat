@@ -86,7 +86,7 @@ return {
         open(F, app)
         local s = F.screenText()
         T.ok(s:find("Cups in a litre", 1, true), s)
-        T.ok(s:find("Claude  2 messages", 1, true), s)
+        T.ok(s:find("Anthropic  2 messages", 1, true), s)
         T.ok(s:find("2m", 1, true), s)
         T.ok(s:find("Fix my regex", 1, true))
         T.ok(s:find("OpenAI  6 messages  1 program", 1, true), s)
@@ -94,10 +94,22 @@ return {
         T.ok(s:find("Enter open", 1, true))
         T.ok(not s:find("No chats yet", 1, true))
     end,
+    -- Gateways spec 5.3: the service's label and colour; old rows keep
+    -- theirs (claude is Anthropic, openai stays OpenAI).
+    lists_service_label = function()
+        local F, app = setup({ seed = function(st, F)
+            st:saveChat(chatRow("v1", "Gem", "vercel", 4, 60, F))
+        end })
+        open(F, app)
+        T.ok(F.screenText():find("Vercel  4 messages", 1, true), F.screenText())
+        local dot
+        for _, r in ipairs(F.rects) do if r.c == app.theme.bar.vercel then dot = r end end
+        T.ok(dot, "the Vercel dot")
+    end,
     one_message_is_singular = function()
         local F, app = setup({ seed = function(st, F) st:saveChat(chatRow("a1", "T", "claude", 1, 60, F)) end })
         open(F, app)
-        T.ok(F.screenText():find("Claude  1 message", 1, true))
+        T.ok(F.screenText():find("Anthropic  1 message", 1, true))
         T.ok(not F.screenText():find("1 messages", 1, true))
     end,
     empty_state = function()

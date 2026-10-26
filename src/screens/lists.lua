@@ -8,6 +8,7 @@
 -- Missing pieces are skipped quietly.
 local Keys = require("src.keys")
 local Age = require("src.age")
+local Services = require("src.services")
 
 local S = {}
 S.__index = S
@@ -15,7 +16,6 @@ S.__index = S
 local ROW_H = 32
 local LIST_BOT = 304
 local TABS = { "Chats", "Programs" }
-local PROVIDER_LABELS = { claude = "Claude", openai = "OpenAI" }
 local FOOTERS = {
     "Enter open   F2 new   Del delete",
     "Enter run   F4 open its chat   Del delete",
@@ -147,7 +147,7 @@ function S:tick() return false end
 -- ------------------------------------------------------------------- draw
 
 function S:chatLines(r)
-    local label = PROVIDER_LABELS[r.provider] or ascii(r.provider)
+    local label = ascii(Services.label(r.provider)) -- gateways spec 5.3
     local line = label .. "  " .. plural(r.count or 0, "message")
     local np = count(r.programs)
     if np > 0 then line = line .. "  " .. plural(np, "program") end
