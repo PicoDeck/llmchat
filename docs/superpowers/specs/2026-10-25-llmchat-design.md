@@ -1,8 +1,10 @@
 # LLM Chat 2.0: design
 
-Date: 2026-10-25. Status: reviewed by a builder check, with the owner's answers to its questions included. Waiting for the owner's approval.
+Date: 2026-10-25. Status: approved, built, and merged to `main` on 2026-10-26.
 
-A rewrite of PicoDeck's **LLM Chat** app. It chats with Claude and OpenAI models, streams replies, keeps recent chats, and can have the model write small Lua programs that run on the spot, inside a sandbox, without leaving the app. It moves out of the `picodeck` repo into its own repo, like PicoSurf and BRICK-15, so it ships through the App Store on its own.
+**Changed 2026-10-26** by [the gateways design](2026-10-26-llmchat-gateways-design.md): the direct OpenAI provider is gone; OpenCode, OpenRouter and Vercel AI Gateway are added; and an F4 model picker replaces the Provider and Model settings, with every model named `<service>/<model>`. Sections 2, 3, 4.1, 5, 6, 8, 10 and 11 below are updated to match. The gateways design has the details and the decisions behind them; where the two disagree, it wins.
+
+A rewrite of PicoDeck's **LLM Chat** app. It chats with Claude, and with the models on OpenCode, OpenRouter and Vercel AI Gateway, streams replies, keeps recent chats, and can have the model write small Lua programs that run on the spot, inside a sandbox, without leaving the app. It moves out of the `picodeck` repo into its own repo, like PicoSurf and BRICK-15, so it ships through the App Store on its own.
 
 Mockups of every screen, drawn by the real firmware in the simulator, are in [`docs/mockups/`](../../mockups/). The owner reviewed them and said "Everything looks good".
 
@@ -25,7 +27,7 @@ The owner wants it rebuilt on the current SDK and UI pieces, OpenAI kept, Claude
 
 **Goals**
 1. A quick question is fast. The app opens on a fresh chat with the cursor in the compose box. The reply streams in word by word. (**Owner:** usage is mostly quick questions, sometimes a longer back-and-forth.)
-2. Two providers: Claude (Anthropic Messages API) and OpenAI. **Owner.**
+2. Claude through Anthropic's own Messages API, and any chat model on OpenCode, OpenRouter or Vercel AI Gateway through Chat Completions, picked from one list as `<service>/<model>`. **Owner** (the gateways replaced OpenAI on 2026-10-26).
 3. Recent chats are kept on the SD card, in a list you can reopen and carry on from. **Owner.**
 4. When the model writes a Lua program, it is saved as a file you can run from inside the app. **Owner:** a file runnable from this app is enough for now.
 5. A program that crashes, hangs or calls `sys.exit()` never takes the chat app down with it. **Owner.**
@@ -35,7 +37,8 @@ The owner wants it rebuilt on the current SDK and UI pieces, OpenAI kept, Claude
 - Turning a program into a launcher app. **Owner:** that's a later step.
 - Multi-file programs, programs with assets, programs that `require` modules.
 - Images, files or voice in chats. Tool use or web search by the model.
-- OpenAI-compatible local servers (Ollama, LM Studio). The old app had an Ollama option. **Call:** dropped, because the owner asked for OpenAI and Claude, and OpenAI's current API isn't what those servers speak (6.3). It could come back later as a third provider using Chat Completions.
+- OpenAI's own API. **Owner:** dropped on 2026-10-26; GPT models are reachable through OpenRouter and Vercel.
+- OpenAI-compatible local servers (Ollama, LM Studio). The old app had an Ollama option. **Call:** dropped. The app speaks Chat Completions to the gateways (6.3), so one could come back later as another service.
 - Conversation sync or export.
 - A fully isolated program runner, which would need a firmware feature (section 9.7).
 
@@ -56,7 +59,7 @@ From the firmware (`picodeck/CLAUDE.md`, `src/os/CLAUDE.md`, `src/drivers/CLAUDE
 - At most 8 loaded fonts at a time, shared by `display.loadFont` and `graphics.font.new`. The chat uses 2 (Sans, Sans Bold) and leaves 6 for programs.
 - HTTP callbacks run inside the firmware's service pass, *between any two Lua statements*. Callbacks only record what arrived; all parsing happens in the main loop (PicoSurf's `src/http.lua` follows the same rule).
 - The HTTP read timeout is idle-based: it restarts whenever bytes arrive (`http.c`), so a long streamed reply never times out while data keeps coming.
-- HTTPS verifies certificates against an 11-root bundle. **Checked 2026-10-25:** `api.openai.com` and `api.anthropic.com` both chain through Google Trust Services WE1 to **GTS Root R4**, which the bundle has. Cloudflare's other CAs (Let's Encrypt, SSL.com) are in the bundle too. No firmware change is needed.
+- HTTPS verifies certificates against an 11-root bundle. **Checked 2026-10-25 and 2026-10-26:** `api.anthropic.com`, `openrouter.ai` and `opencode.ai` chain to **GTS Root R4**, and `ai-gateway.vercel.sh` to **ISRG Root X1**; the bundle has both. No firmware change is needed.
 - A verified connection waits for SNTP to set the clock. Before that, a request fails with an error starting `clock not set`.
 - `sys.exit()` is sticky: no `pcall` can catch it (`src/os/CLAUDE.md`, "App exit is sticky"). Programs must never reach the real one (section 9.3).
 - FatFS allows 16 open files in total, so every file handle a program opens must be closed after it runs.
@@ -71,7 +74,7 @@ From the firmware (`picodeck/CLAUDE.md`, `src/os/CLAUDE.md`, `src/drivers/CLAUDE
   {
     "id": "net.picodeck.llmchat",
     "name": "LLM Chat",
-    "description": "Chat with Claude and OpenAI models, and have them write Lua programs you can run on the spot.",
+    "description": "Chat with Claude and the models on OpenCode, OpenRouter and Vercel, and have them write Lua programs you can run on the spot.",
     "version": "2.0.0",
     "author": "PicoDeck",
     "category": "network",
@@ -85,8 +88,9 @@ From the firmware (`picodeck/CLAUDE.md`, `src/os/CLAUDE.md`, `src/drivers/CLAUDE
   app.json  main.lua  icon.png  README.md  Makefile
   fonts/        sans.pfn, sans-bold.pfn, LICENSE (copied from PicoSurf)
   prompt/       system.txt, picodeck-api.md (section 10)
-  src/          app.lua, http.lua, sse.lua, providers/claude.lua, providers/openai.lua,
+  src/          app.lua, http.lua, sse.lua, services.lua, providers/claude.lua, providers/cc.lua,
                 chat.lua, store.lua, keys.lua, markdown.lua, layout.lua, fold.lua,
+                modellists.lua, picker.lua,
                 programs.lua, sandbox.lua, widgets.lua (copied: section 3), screens/*.lua
   tests/        run.lua, fakepc.lua, test_*.lua, e2e/ (pytest + fake API server)
   tools/        build_lua32.sh (from PicoSurf)
@@ -120,7 +124,13 @@ The mockups in `docs/mockups/` are the reference layout:
 | `05-program-error.png` | A program that crashed |
 | `06-recent-chats.png` | Recent chats (tab 1) |
 | `07-programs.png` | Saved programs (tab 2) |
-| `08-settings.png` | Settings |
+| `08-settings.png` | Settings (replaced by 14) |
+| `09-picker.png` | The model picker (F4) |
+| `10-picker-filter.png` | The picker, filtered |
+| `11-picker-first-time.png` | The picker before the lists are downloaded |
+| `12-new-chat.png` | A new chat, naming the current model |
+| `13-chat-switched.png` | The model switch line |
+| `14-settings.png` | Settings: a key per service |
 
 Common to every screen:
 - The header is `ui.drawHeader(title)`, with the clock, WiFi and battery drawn by the firmware.
@@ -130,10 +140,13 @@ Common to every screen:
 ### 5.1 Chat screen
 - **Layout.** Conversation area from y 22 to above the compose box. The compose box is a 3-row `W.TextArea` (6x8) at the bottom. Footer at y 302.
 - **Your messages** are right-aligned boxes in blue (`rgb(30,58,104)`), at most 240 px wide.
-- **The model's messages** are left-aligned and full width, with a 2 px bar in the provider's colour: Claude `rgb(217,119,87)`, OpenAI `rgb(16,163,127)`.
+- **The model's messages** are left-aligned and full width, with a 2 px bar in its service's colour: Anthropic `rgb(217,119,87)`, OpenCode `rgb(240,196,70)`, OpenRouter `rgb(120,140,255)`, Vercel `rgb(215,215,215)`. Replies from before the update keep theirs (OpenAI's `rgb(16,163,127)`).
+- **The new chat intro** shows "Ask anything", the current model's full id with its service's dot, and the key caps F1 "Recent chats", F4 "Model", F5 "Settings" (mockup 12).
+- **The footer's right side** shows the current model's short name, the part after its last `/` (`gemini-3.8-flash`), cut with ".." if it would reach the keys.
+- **One current model** (`prefs.model`), for every chat. Sending in a chat whose last reply came from another model adds the note "now `<id>`" before the message, drawn dim and centred between two thin rules (mockup 13).
 - **A reply arriving.** The spinner (`ui.drawSpinner`, radius 4) sits at the end of the text. While the model thinks before its first word, the reply shows "Thinking..." and the spinner. The view follows the reply, unless you have scrolled up; scrolling back to the bottom resumes following.
 - **The scroll bar** is 2 px wide at the right edge, shown only when the conversation is taller than the view.
-- **Notes** are local lines that are never sent to the model: errors ("Claude: 401, the API key was rejected. Check Settings."), "Reply stopped", "dice.lua ended". They are drawn dim, or red for errors.
+- **Notes** are local lines that are never sent to the model: errors ("Anthropic rejected the API key. Check Settings."), "Reply stopped", "dice.lua ended", "now vercel/google/gemini-3.8-flash". They are drawn dim, or red for errors.
 
 | Key | Action |
 |---|---|
@@ -146,6 +159,7 @@ Common to every screen:
 | F1 | Recent chats |
 | F2 | new chat |
 | F3 | run the newest program in this chat (only when one exists and no reply is arriving) |
+| F4 | pick a model (the picker, gateways design 5.1); at any time, applying from the next message |
 | F5 | Settings |
 
 **Call:** Up/Down always scroll the conversation; the compose box's cursor moves with Left/Right only. Messages are short, and scrolling is the frequent action.
@@ -153,7 +167,7 @@ Common to every screen:
 ### 5.2 Recent chats and programs
 - `ui.drawTabs` with "Chats" and "Programs"; Left/Right switch tabs.
 - Two-line rows, 32 px each, with the selected row on `rgb(40,70,130)`:
-  - Chats: the title in Sans; a 6x8 line with the provider and message count (plus "N programs" when there are any); the age at the right; a provider-colour dot at the left.
+  - Chats: the title in Sans; a 6x8 line with the service's label ("Vercel"; "Anthropic" for chats from before the update, "OpenAI" for OpenAI ones) and the message count (plus "N programs" when there are any); the age at the right; a service-colour dot at the left.
   - Programs: the file name; "from <chat title>" and the size; the age.
 - Chats keys: Enter opens, F2 new chat, Del deletes (after `ui.confirm`), Esc back to the chat.
 - Programs keys: Enter runs, F4 opens the chat that made it, Del deletes (after `ui.confirm`), Esc back.
@@ -162,24 +176,22 @@ Common to every screen:
 ### 5.3 Program error screen
 Mockup 05.
 - `ui.drawPanel` titled "Program stopped", with the error message in red (wrapped to 6x8 columns), how long the program ran, and up to the last 5 lines it printed.
-- Buttons "Ask <Claude|OpenAI> to fix" (focused) and "Back to chat".
+- Buttons "Ask the model to fix" (focused) and "Back to chat". The hint above them names the current model's short name: "`gemini-3.8-flash` can see the error and the code and send back a fixed version." The fix goes to the current model.
 - Keys: Left/Right move between the buttons, Enter chooses, F3 runs the program again, Esc goes back to the chat.
 
 ### 5.4 Settings
-Mockup 08, plus one row the mockup doesn't show, Thinking (**Call**):
+Mockup 14 (gateways design 5.4). Two dim section labels, each with a thin rule, and seven rows:
 
-| Row | Widget | Notes |
-|---|---|---|
-| Provider | two radios | Claude / OpenAI |
-| Model | `W.Select` | that provider's list (section 6) plus "Custom...", which asks for a model id |
-| Claude key | text field, masked | shows `sk-ant-` + `*` + the last 4 characters; Enter edits in clear text |
-| OpenAI key | text field, masked | as above |
-| Thinking | `W.Select` | Low (default) / Medium / High. Sets Claude's `effort` and OpenAI's reasoning effort (6.2, 6.3) |
-| Reply font | `W.Select` | Sans (default) / System (6x8) |
-| Instructions | `W.TextArea`, 3 rows | added to the system prompt. Default: "Keep answers short: I'm reading on a 320 px screen." |
+| Section | Row | Widget | Notes |
+|---|---|---|---|
+| API keys | Anthropic, OpenCode, OpenRouter, Vercel | text field, masked | the known prefix (`sk-ant-`, `sk-or-v1-`, `sk-`), then `*` and the last 4 characters; Enter edits in clear text; an empty key removes it |
+| Replies | Thinking | `W.Select` | Low (default) / Medium / High: each service's effort field (6.2, 6.3) |
+| | Reply font | `W.Select` | Sans (default) / System (6x8) |
+| | Instructions | `W.TextArea`, 3 rows | added to the system prompt. Default: "Keep answers short: I'm reading on a 320 px screen." |
 
+- The model is picked with F4 in the chat (5.1), not here. The section labels can't be focused; Up and Down skip them.
 - Key fields accept up to 512 characters.
-- `prefs.json` also takes two hidden overrides, `claude_base` and `openai_base`. The e2e tests use them to reach a local fake server (section 11).
+- `prefs.json` also takes four hidden overrides, `anthropic_base`, `opencode_base`, `openrouter_base` and `vercel_base`. The e2e tests use them to reach a local fake server (section 11); each replaces its service's chat host and model-list host.
   - Only `http://127.0.0.1:<port>` and `http://localhost:<port>` are accepted; anything else is ignored (9.3).
   - They have no row in Settings.
 
@@ -192,18 +204,26 @@ Mockup 08, plus one row the mockup doesn't show, Thinking (**Call**):
 ### 6.1 Common shape
 Each provider module turns the neutral conversation into a request, and stream events into neutral calls:
 ```lua
--- request(conv, opts) -> { host, port, tls, path, headers, body }   (body: a JSON string)
--- parser(handlers) -> feed(event_name, data_string)
+-- One module per kind of API: src/providers/claude.lua (the anthropic service) and
+-- src/providers/cc.lua, built once per gateway from its row in src/services.lua.
+-- request(json, items, opts) -> path, headers, body     opts = {key, model, effort, system}
+--                                                       (model: the id after the service part)
+-- parser(json, handlers) -> feed(event_name, data_string), finish()
 --   handlers.text(delta)            visible text
 --   handlers.thinking()             the model is thinking (show "Thinking...")
---   handlers.done(info)             info = { stop = "end"|"length"|"refusal"|..., raw = <provider blocks to store>, usage = {...} }
+--   handlers.done(info)             info = { stop = "end"|"length"|"refusal"|..., raw = <Claude blocks to store>, usage = {...} }
 --   handlers.error(message)         an error event in the stream
+--   finish()                        the chat calls it when the connection ends (a CC stream
+--                                   closed after its finish reason is complete; Claude's no-op)
+-- titleRequest(json, key, firstUser, firstReply, model), titleText(json, body),
+-- describeError(json, status, body, retryAfter)
+-- retryNoEffort(status)             CC only: true for a 400 (6.3)
 ```
 - `src/sse.lua` parses Server-Sent Events from arbitrary chunk boundaries:
   - LF and CRLF line endings; `event:` and `data:` fields; multi-line data joined with `\n`.
   - Lines starting `:` (comments, keep-alives) are ignored.
   - An event is dispatched on a blank line.
-- `src/http.lua` wraps `picocalc.network.http` for one streaming POST:
+- `src/http.lua` wraps `picocalc.network.http` for one streaming POST (and a GET, for the gateways' model lists, gateways design 8):
   - Setup: `setReadBufferSize(64 * 1024)`, `setConnectTimeout(20)`, `setReadTimeout(120)` (idle-based; long enough for a model thinking before its first word).
   - Callbacks only append `conn:read()` chunks to a list and set flags. The main loop drains the list into the SSE parser every frame.
   - A non-200 status means the body is a JSON error, not a stream: read it whole and decode it (section 6.4).
@@ -237,14 +257,14 @@ Each provider module turns the neutral conversation into a request, and stream e
   | Haiku 5.5 | `claude-haiku-5-5` | 0.10 / 0.50 | no server-side refusal fallback |
   | Fable 5.1 | `claude-fable-5-1` | 10 / 50 | most capable; slowest |
 
-  - **Call:** the mockups show Sonnet 5.5, but the default is Opus 5.5 at Low thinking. A quick question costs about 1-2 cents with the cached prompt. The owner can pick another model in Settings.
-  - The list is in `src/providers/claude.lua`; "Custom..." covers new models until the app is updated.
+  - **Call:** the mockups show Sonnet 5.5, but the default is Opus 5.5 at Low thinking (`anthropic/claude-opus-5-5`). A quick question costs about 1-2 cents with the cached prompt. The owner can pick another model with F4.
+  - The list is in `src/providers/claude.lua`, the picker's Anthropic group; a newer model can be typed whole in the picker (`anthropic/<id>`).
 - **Streaming events.** Text appears from `content_block_delta` / `text_delta`. A `content_block_start` of type `thinking` calls `handlers.thinking()`. Display defaults to `"omitted"`, so thinking text is empty; only the signature matters.
 - **Raw blocks** (must get right):
   - Rebuild each assistant message's full `content` array from the stream: `thinking` blocks with their `signature` (from `signature_delta`), `text` blocks, and `fallback` blocks.
   - Store the array with the message, and send it back unchanged on every later request, even after a model change. The API drops, unbilled, any block the current model can't read.
   - History must be **append-only**: an edited earlier turn invalidates thinking blocks, and accounts created on or after 2026-08-31 get a 400. The app never rewrites a sent message.
-  - Messages from OpenAI go to Claude as plain text.
+  - Replies from the gateways (and old OpenAI ones) go to Claude as plain text. Items from before the update say `provider: "claude"`; their raw blocks go back too.
 - **Refusals.**
   - Send `"fallbacks": "default"` with the header `anthropic-beta: server-side-fallback-2026-07-01` for Opus 5.5, Sonnet 5.5 and Fable 5.1, but not Haiku 5.5. On a policy decline, the API then runs a fallback model on the same stream.
   - A `fallback` block marks the switch point. When storing a message that has one, drop any `thinking` / `redacted_thinking` block before the last `fallback` block (the echo rule).
@@ -254,67 +274,29 @@ Each provider module turns the neutral conversation into a request, and stream e
 - **Stopped replies.** When Esc stops a reply, keep the text received so far as the assistant message, marked `stopped`. Drop any incomplete thinking block (it has no signature yet). The message is sent back later as plain text.
 - `stop_reason: "max_tokens"` adds the note "Reply cut off at the length limit."
 
-### 6.3 OpenAI
-Facts below were checked against OpenAI's docs (developers.openai.com/api) on 2026-10-25.
-
-- **Call: the Responses API.**
-  - OpenAI recommends it "for all new projects".
-  - Some models (the `*-pro` ones) work only there.
-  - Chat Completions remains supported, but it's the older API.
-  - The cost of this choice: OpenAI-compatible local servers (Ollama, LM Studio), which mostly speak Chat Completions, aren't supported. That is a non-goal (section 2).
-- `POST https://api.openai.com/v1/responses`. Headers: `Authorization: Bearer <key>`, `Content-Type: application/json`.
-- Body:
-  ```json
-  {
-    "model": "gpt-6-luna",
-    "instructions": "<section 10>",
-    "input": [ {"role": "user", "content": "..."}, {"role": "assistant", "content": "..."} ],
-    "stream": true,
-    "store": false,
-    "max_output_tokens": 32000,
-    "reasoning": {"effort": "none"},
-    "stream_options": {"include_obfuscation": false}
-  }
-  ```
-  - `store: false`: otherwise OpenAI keeps every response for at least 30 days.
-  - `include_obfuscation: false` drops padding from every delta event.
-  - `max_output_tokens` includes reasoning tokens. Do not send `max_tokens` (deprecated) or `temperature` / `top_p`.
-  - History goes as plain-string `content`. Reasoning items are not replayed: that is optional, and the app keeps no `raw` for OpenAI.
-- **Models** (built-in list, standard-tier prices for prompts up to 272K tokens):
-
-  | Label | Id | $/MTok in / out | Thinking "Low" sends |
-  |---|---|---|---|
-  | GPT-6 Luna | `gpt-6-luna` | 0.10 / 0.50 | `none` |
-  | GPT-6.1 Sol | `gpt-6.1-sol` | 2 / 10 | `low` (rejects `none`) |
-  | GPT-6 Astra | `gpt-6-astra` | 10 / 50 | `low` (rejects `none`) |
-
-  - **Call:** the default is GPT-6 Luna at Low (effort `none`). OpenAI calls it the fastest and most cost-effective model, and at `none` it streams text without a silent thinking pause, which suits quick questions.
-  - Medium and High send `medium` and `high`. "Custom..." models send `low` for Low.
-- **Streaming events:**
-  - `response.output_text.delta`: `delta` is the text.
-  - `response.refusal.delta`: show it as the reply text.
-  - `response.output_item.added` with item `type: "reasoning"`: call `handlers.thinking()`.
-  - `response.completed`: done, with `response.usage`.
-  - `response.incomplete`: done, with `incomplete_details.reason`, e.g. `max_output_tokens`, which becomes "cut off".
-  - `response.failed`: `response.error.message`.
-  - `error`: `message`.
-  - Ignore every other event.
-  - There is no `[DONE]` line.
-- **Watch out:** `response.completed` repeats the whole answer and the instructions on a single `data:` line, tens of KB. The SSE parser must collect a long line in pieces (a table of chunks, joined once) and not by repeated concatenation, which is quadratic.
-- **Prompt caching** is automatic from 1,024 input tokens. The system prompt (section 10) is over that, so it caches. Reads cost about 0.1x; writes cost 1.25x.
-- **Keys:** OpenAI documents no length (`sk-proj-` keys run about 164 characters), so accept up to 512 and don't check the format. Keys can now expire, which shows up as a 401.
+### 6.3 Chat Completions (the gateways)
+OpenAI's own API was dropped on 2026-10-26. The three gateways (OpenCode, OpenRouter, Vercel AI Gateway) speak Chat Completions, served by one module, `src/providers/cc.lua`, built from each service's row in `src/services.lua`. Gateways design 6 has the whole contract; in short:
+- `POST <base><chat path>` with `Authorization: Bearer <key>`, `stream: true`, `stream_options: {include_usage: true}`, and the system prompt as the first `messages` entry. Every earlier reply goes as plain text; Claude's raw blocks stay with Anthropic.
+- Effort: OpenRouter and Vercel send `reasoning: {effort}`, OpenCode `reasoning_effort`. No `max_tokens`: each model's own limit applies (checked in the gateways' verify-first: long programs finish).
+- A model that rejects the effort field (OpenCode's Mistral answers HTTP 400 to every effort but high) gets the request once more without it.
+- The stream is `data:` JSON chunks ending with `[DONE]`; reasoning arrives in `reasoning`, `reasoning_details` or `reasoning_content` and only shows "Thinking...". A stream that closes after its finish reason without `[DONE]` is complete. `content_filter` is a refusal; OpenRouter's mid-stream `error` chunk is an error.
+- Titles: a non-streaming request to the chat's own model, `max_tokens` 300, effort low.
+- Keys are accepted up to 512 characters, unchecked. Each key goes only to its own service's host (or the loopback test override, 5.4).
 
 ### 6.4 Errors
 Each failure becomes a note in the chat. The last request can be retried by pressing Enter on an empty compose box.
 - No WiFi (`network.getStatus()` not connected): "No WiFi."
 - `clock not set`: retry once by itself after 3 s, then show "The clock isn't set yet; try again in a moment."
 - TLS errors: show the firmware's message.
-- 401 / 403: "<Provider> rejected the API key. Check Settings."
-- 429: tell an account out of credit apart from a rate limit.
-  - OpenAI out of credit: `error.code` is `credit_balance_exhausted`, `organization_spend_limit_exceeded`, `project_spend_limit_exceeded` or `organization_usage_limit_exceeded`, or `error.type` is `insufficient_quota`. Say "Your OpenAI account is out of credit or over its spend limit"; retrying won't help.
-  - Otherwise: "Rate limited; try again in a moment", plus the `Retry-After` seconds when the header is present.
-- Error bodies: Claude's is `{"type":"error","error":{"type","message"}}` and OpenAI's is `{"error":{"message","type","code"}}`. Show the provider's `message` under the friendly line.
-- 5xx and 529 overloaded: "<Provider> is busy; try again."
+- No key for the current model's service: "Add your `<Label>` key in Settings (F5), or pick another model (F4)."
+- The HTTP status decides, never the body's `error.type` (OpenCode's 401 says `server_error`):
+  - 401: "`<Label>` rejected the API key. Check Settings." (Anthropic: 401 and 403.)
+  - 402 (gateways): "Your `<Label>` account is out of credit."
+  - 403 (gateways): "`<Label>` refused this request." (OpenRouter's moderation and budget limits.)
+  - 429: "Rate limited; try again in a moment", plus the `Retry-After` seconds when the header is present.
+  - 5xx and 529 overloaded: "`<Label>` is busy; try again."
+  - Anything else: "`<Label>`: HTTP `<status>`." (a typed model id the service doesn't know lands here).
+- Error bodies: Anthropic's is `{"type":"error","error":{"type","message"}}`, the gateways' `{"error":{"message",...}}`. Show the `message` under the friendly line.
 - A connection lost mid-reply: keep the partial text, marked as interrupted.
 - An `error` event mid-stream: same as a lost connection.
 
@@ -366,8 +348,9 @@ On load, if `<file>` is missing but `<file>.tmp` exists, finish the rename. A po
 ### 8.1 Files
 | Path | Contents |
 |---|---|
-| `prefs.json` | provider, model per provider, thinking, font, instructions, last open chat id, drafts by chat id, and the hidden test overrides (5.4) |
-| `keys.txt` | `claude=...` and `openai=...` lines; `#` starts a comment; editable from a computer over USB or in the Text Editor app |
+| `prefs.json` | the current model (`model`, a full id), the recent models (`recent`, up to 8, newest first; left out while empty), thinking, font, instructions, last open chat id, drafts by chat id, and the hidden test overrides (5.4). An old file is moved over on load: `models.claude` becomes `anthropic/<id>`, `claude_base` becomes `anthropic_base`, and `provider`, `models`, `openai_base` go |
+| `keys.txt` | `anthropic=`, `opencode=`, `openrouter=` and `vercel=` lines; `#` starts a comment; editable from a computer over USB or in the Text Editor app. `claude=` is read as `anthropic=` (an `anthropic=` line wins); `openai=` is ignored, and dropped when Settings saves |
+| `models/<service>.txt` | a gateway's model list: `# fetched <epoch>`, then one id per line without the service part (gateways design 8.4) |
 | `chats/index.json` | `[{id, title, provider, model, created, updated, count, programs}]`, newest first |
 | `chats/<id>.json` | one chat (8.2) |
 | `programs/index.json` | `{ [name] = {chat, created, updated, size} }` |
@@ -379,23 +362,25 @@ On load, if `<file>` is missing but `<file>.tmp` exists, finish the rename. A po
 { "v": 1, "id": "20261025-140212-3", "title": "Dice roller", "created": 1792908000, "updated": 1792908132,
   "items": [
     { "role": "user", "text": "make me a dice roller" },
-    { "role": "assistant", "provider": "claude", "model": "claude-opus-5-5",
+    { "role": "assistant", "provider": "anthropic", "model": "anthropic/claude-opus-5-5",
       "text": "Here's a dice roller...", "raw": [ ...Claude content blocks... ], "stopped": false },
-    { "role": "note", "kind": "program", "text": "dice.lua ended after 12 s" }
+    { "role": "note", "kind": "program", "text": "dice.lua ended after 12 s" },
+    { "role": "note", "kind": "model", "text": "now vercel/google/gemini-3.8-flash" }
   ] }
 ```
 - `note` items are local and never sent.
-- `raw` holds a provider's own blocks, sent back only to that provider (6.2, 6.3).
+- `provider` is the service id and `model` the full id. Items from before the update say `claude` or `openai` with a bare model id; they read as `anthropic/<id>` and `openai/<id>`.
+- `raw` holds Claude's own blocks, sent back only to Anthropic (6.2).
 - Ids come from the clock (`sys.getClock()`) when it is set, and otherwise from a counter kept in `prefs.json`.
 - **Titles: Owner: tidy short titles**, as in the mockups ("how many cups in a litre?" becomes "Cups in a litre").
   - Until the title arrives, the chat shows the first user message, cut at a word to 40 characters.
-  - **The request.** When a new chat's first reply completes, send one small non-streaming request to the same provider's cheapest model:
-    - Claude: `claude-haiku-5-5`, `max_tokens` 200, effort `low`.
-    - OpenAI: `gpt-6-luna`, `max_output_tokens` 64, effort `none`.
+  - **The request.** When a new chat's first reply completes, send one small non-streaming request to the chat's service:
+    - Anthropic: `claude-haiku-5-5`, `max_tokens` 200, effort `low`.
+    - A gateway: the chat's own model, `max_tokens` 300, effort low (gateways design 6.4).
     - Prompt: "Write a title of 2 to 5 words for this chat. Reply with the title only." Then the first user message and the first reply, each cut to 1,000 characters.
     - Cost: well under a tenth of a cent per chat.
   - **The result.** Fold the reply to ASCII, strip surrounding quotes and trailing punctuation, cap it at 40 characters, then update the header, the chat file and `chats/index.json`.
-  - **Failure.** If the request fails, or the chat has no key for that provider, keep the cut first message and don't retry.
+  - **Failure.** If the request fails, or there is no key for that service, keep the cut first message and don't retry.
   - **Conflicts.** Starting a program cancels a pending title request. It is sent again after the chat's next reply.
 - **Call:** keep the 50 most recently updated chats and delete older ones when a new chat is saved. The owner raised no objection to 50.
 - **Call: programs outlive their chats.**
@@ -410,7 +395,7 @@ On load, if `<file>` is missing but `<file>.tmp` exists, finish the rename. A po
 
 ### 8.4 Importing from the old app
 On first start, if `picocalc.config` still holds `llmchat_api_key`:
-- Copy it to `keys.txt`: as `openai=` if `llmchat_provider` is 1, or `claude=` if it is 2.
+- Copy it to `keys.txt` as `anthropic=` if `llmchat_provider` is 2. A provider-1 key is an OpenAI key and is not imported (gateways design 9.5).
 - Ignore Ollama (provider 3); its endpoint was the old native `/api/chat` path, which isn't compatible.
 - Then clear the old keys and save.
 
@@ -500,7 +485,7 @@ Keep that table in `src/sandbox.lua`'s header comment. A host test checks the pr
 - **Limits:** a program can still swallow the stop; 9.7 lists the ways (its own `pcall` is the simplest). The system menu's "Exit App" remains as a last resort, except in the one case 9.7 names (a callback the firmware's hook fires that never returns). It closes the chat app, which loses nothing, since the chat is already saved.
 
 ### 9.6 Fixing a crash
-"Ask <provider> to fix" appends a user message and sends it. The code is already in the conversation, so it isn't resent, and history stays append-only (6.2):
+"Ask the model to fix" appends a user message and sends it to the current model. The code is already in the conversation, so it isn't resent, and history stays append-only (6.2):
 ```
 dice.lua stopped with an error:
 dice.lua:12: attempt to concatenate a nil value (local 'b')
@@ -535,23 +520,24 @@ The real wall would be a firmware feature: run a program as its own app in its o
    - **Call:** about 3-4K tokens, which is over every model's cache minimum.
 4. **The owner's instructions** from Settings, last, because they change most often.
 
-Claude gets this as `system`; OpenAI gets it as `instructions` (6.3).
+Claude gets this as `system`; the gateways get it as the first `messages` entry (6.3).
 
 A test keeps the cheat sheet honest: every `picocalc.x.y` it names must appear in `$PICODECK_ROOT/docs/API-*.md`. The test skips when `PICODECK_ROOT` is unset, as PicoSurf's does. An e2e test runs the example program from the prompt in the simulator.
 
 ## 11. Testing
 
-**Real API use. Owner: the builder may use the owner's Claude and OpenAI keys**, for about $2 in total, mostly on the cheap models (Haiku 5.5, GPT-6 Luna).
+**Real API use. Owner: the builder may use the owner's keys** (Anthropic, OpenCode, OpenRouter, Vercel), for about $2 in total, mostly on cheap models (Haiku 5.5, DeepSeek V4.1 Flash). Every request is logged in `docs/research/api-spend.md`.
 - **Where the keys live:** ask the owner where they are, and keep the builder's copy outside the repo in `~/.config/llmchat/keys.txt` (mode 600), as PicoSurf keeps its proxy token. Never commit a key.
-- **Recording:** `tools/record_stream.py` sends a real request and saves the raw SSE to `tests/fixtures/<provider>-<case>.sse`, with request ids and anything key-like removed. Record text, thinking, `max_tokens` / `incomplete`, and the title request for each provider, plus a 401 from a deliberately wrong key.
+- **Recording:** `tools/record_stream.py <anthropic|opencode|openrouter|vercel> <case>` sends a real request and saves the raw reply to `tests/fixtures/<service>-<case>.sse` (Anthropic's keep their `claude-` names), with ids and anything key-like removed. Anthropic: text, thinking, max_tokens, title, 401. Gateways: text, reasoning, length, title, 401. OpenRouter's streams are hand-written until its key is renewed.
 - **Hand-written cases:** a refusal and a mid-stream fallback can't be triggered on demand. Write those fixtures by hand from the API docs, and mark them so in their file names.
 - **Device checks:** the builder runs the checks in section 12 and the release checklist with these keys, keeping a running total of what was spent.
 
 **Host tests** (`make test`: `lua5.4 tests/run.lua` and `build/lua32 tests/run.lua`, PicoSurf's pattern, fake `picocalc` in `tests/fakepc.lua`):
 - **SSE:** every split of a recorded stream across chunk boundaries; CRLF; comments; multi-line data.
 - **Claude parser:** recorded streams for text, thinking + signature, fallback mid-stream, refusal, max_tokens, an error event. Check the stored `raw` against the echo rule.
-- **OpenAI parser:** recorded Responses streams for text, a reasoning item, a refusal, `incomplete` (max_output_tokens), `failed`, an `error` event, and a `response.completed` line over 64 KB split across many chunks.
-- **Request builders:** golden JSON for both providers, including an OpenAI message sent to Claude and back. Under lua32, check that integers encode without `.0`.
+- **Chat Completions parser:** the recorded Vercel and OpenCode streams and the hand-written OpenRouter ones, split at every chunk size; usage with and without `choices`; a stream closed after its finish reason without `[DONE]`; OpenRouter's mid-stream error.
+- **Request builders:** golden JSON for Anthropic and each gateway, including Claude replies (with raw blocks) and old OpenAI replies sent to a gateway as plain text. Under lua32, check that integers encode without `.0`.
+- **Model lists and the picker:** the list scanner on fixtures cut from the real lists at every split, an escaped `"id"`, each service's keep rules, bounded memory on a 2 MB list; the picker's groups, word filter (literal, never a pattern), the "Use" row and selection.
 - **Markdown and layout:** blocks, inline bold and code, partial text while streaming, folding, wrap by advance table, code-line wrap marks.
 - **Program extraction:** names, collisions, the same name in the same chat (`.prev`), invalid headers, snippets ignored.
 - **Store:** index order, the 50-chat cap, atomic writes, drafts, the old-config import.
@@ -562,19 +548,20 @@ A test keeps the cheat sheet honest: every `picocalc.x.y` it names must appear i
   - `fs` refuses `../`, absolute paths outside the folder, and `keys.txt`. So does every other path-taking function on the allowlist (one test per function, generated from 9.4's table).
   - A program's `string.format = nil` doesn't reach the chat, and `getmetatable("")` returns `false`.
   - `sys.loadlib("download")` gets a library that can only write inside the program's folder.
-  - A non-loopback `claude_base` or `openai_base` in `prefs.json` is ignored.
+  - A non-loopback `<service>_base` in `prefs.json` is ignored.
   - `load` without an env gets the program's env.
   - Tracked fonts, files and connections are released.
   - `unloadFont` refuses the chat's fonts.
 
 **Simulator e2e** (`make e2e`, pytest + `picodeck/tests/e2e/picodeck_simulator.py`):
-- A fake API server, `tests/e2e/fake_api.py`, replays the recorded SSE streams (and non-streaming title replies) for both providers on `127.0.0.1`. The app reaches it through hidden test overrides in `prefs.json` (`claude_base`, `openai_base`); the simulator's HTTP is libcurl, so plain `http://` to localhost works.
+- A fake API server, `tests/e2e/fake_api.py`, routes by path to the four services and replays their recorded streams (and non-streaming title replies), and serves the three model lists, on `127.0.0.1`. The app reaches it through the hidden `<service>_base` overrides in `prefs.json`; the simulator's HTTP is libcurl, so plain `http://` to localhost works.
 - **Cases:**
   - Send and stream (screenshot checks of the reply and spinner).
   - Esc stops a reply.
   - A 401 shows the right note; Enter retries.
   - Recent chats: open, delete.
-  - Settings persist.
+  - Settings save the four keys.
+  - F4 opens the picker, typing filters it, Enter picks; a gateway reply streams; sending after a switch adds the "now `<id>`" line; a gateway 401 shows the right note; an old Claude chat (with raw blocks) goes on.
   - A program is saved, F3 runs it, and Esc returns to the chat.
   - A program that errors shows the error screen, and "Ask to fix" sends the right message.
   - A program calling `sys.exit()` returns to the chat, and the app is still running.
@@ -582,7 +569,8 @@ A test keeps the cheat sheet honest: every `picocalc.x.y` it names must appear i
   - A program that loads fonts and opens files leaves nothing behind (run it 10 times; the chat still draws and files still open).
 
 **Device checks** (a short checklist in the README, run before the release tag):
-- A real Claude chat and a real OpenAI chat over TLS.
+- A real chat on each keyed service over TLS (Anthropic, OpenCode, OpenRouter, Vercel).
+- Downloading each model list (the time, the lowest free heap), filtering about 700 ids, and the switch line.
 - Streaming looks smooth.
 - "Stop program" works.
 - Keys from `keys.txt` over USB are read.
@@ -590,7 +578,7 @@ A test keeps the cheat sheet honest: every `picocalc.x.y` it names must appear i
 
 ## 12. Verify first
 
-The builder starts with these, because each could change the design:
+The builder starts with these, because each could change the design. (The gateways' own verify-first questions and answers are in `docs/research/2026-10-26-gateways-verify-first.md`.)
 1. **"Stop program" via a menu-item callback** raising an error out of a tight loop and out of `sys.sleep`, in the simulator and on the device. If it can't, fall back to documenting Sym → Exit App, and look at a small firmware change (for example, a `sys.setInterruptKey`-style hook) as a separate request to the owner.
 2. **Streaming delivery on the device.** Do SSE chunks reach `setRequestCallback` promptly (TLS records of a few hundred bytes), or does anything buffer them?
 3. **The largest POST body the device sends** (try 64, 256 and 512 KB). That sets the long-chat threshold in 8.3.

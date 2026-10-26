@@ -1,6 +1,6 @@
 # LLM Chat: gateway services and the model picker
 
-Date: 2026-10-26. Status: reviewed by a builder check, which raised no questions for the owner. Waiting for the owner's approval.
+Date: 2026-10-26. Status: reviewed by a builder check, approved by the owner, and built on branch `feat/gateways` (plan: `docs/superpowers/plans/2026-10-26-llmchat-gateways.md`). The verify-first answers (section 11) are in `docs/research/2026-10-26-gateways-verify-first.md`.
 
 This changes LLM Chat 2.0 (design: [`2026-10-25-llmchat-design.md`](2026-10-25-llmchat-design.md), "the main spec") in three ways:
 - It adds three gateway services (OpenCode, OpenRouter, Vercel AI Gateway) that speak the Chat Completions API.
@@ -45,7 +45,7 @@ Settings has one Provider row with two choices and one model list per provider. 
 
 ## 3. Facts this rests on
 
-Measured or read on 2026-10-26. The research notes, with a source for every fact, are in [`docs/research/gateway-api-facts.md`](../../research/gateway-api-facts.md), and the raw probe replies (ids removed) are in `docs/research/gateway-probes/`. The spend is logged in `docs/research/api-spend.md` (on branch `chore/real-claude-fixtures`).
+Measured or read on 2026-10-26. The research notes, with a source for every fact, are in [`docs/research/gateway-api-facts.md`](../../research/gateway-api-facts.md), and the raw probe replies (ids removed) are in `docs/research/gateway-probes/`. The spend is logged in `docs/research/api-spend.md`.
 
 - **TLS:** `openrouter.ai` and `opencode.ai` chain to GTS Root R4; `ai-gateway.vercel.sh` chains to ISRG Root X1. Both roots are in the firmware's CA bundle (`picodeck/src/drivers/ca_bundle.c`).
 - **Chat Completions (CC) on all three:** `POST` with `Authorization: Bearer <key>`, `stream: true` and `stream_options: {include_usage: true}`. The SSE stream is `data: {json}` lines ending with `data: [DONE]`. No comment lines were seen, but OpenRouter documents `: OPENROUTER PROCESSING` keep-alives, which `src/sse.lua` already ignores.

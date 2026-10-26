@@ -4,9 +4,17 @@ Open items left when LLM Chat 2.0 was merged (2026-10-26). The build was reviewe
 
 ## Needs the API keys
 
-- The Claude fixtures (`claude-text`, `-thinking`, `-maxtokens`, `-title`, `-401`) are real recordings since 2026-10-26. Still hand-written: `claude-error`, `-fallback`, `-refusal` (`.hand.sse`, which can't be recorded on demand), `claude-markdown.sse` (for the e2e screenshots) and every `openai-*` fixture. There is no OpenAI key, and the OpenAI provider is being redesigned around the gateways.
+- The Claude fixtures (`claude-text`, `-thinking`, `-maxtokens`, `-title`, `-401`) are real recordings since 2026-10-26, and so are Vercel's and OpenCode's (`text`, `reasoning`, `length`, `title`, `401`) and OpenRouter's 401. Still hand-written: `claude-error`, `-fallback`, `-refusal` (`.hand.sse`, which can't be recorded on demand), `claude-markdown.sse` (for the e2e screenshots), and `openrouter-text.hand.sse` / `openrouter-error.hand.sse`: the owner's OpenRouter key has expired. Once it is renewed, record `tools/record_stream.py openrouter text|reasoning|length|title`, and run `tools/probes/cc.py openrouter <model> --long` and the effort probe there (gateways verify-first 3 and 4 skipped OpenRouter).
 - Write and run the stream and POST-size probes (plan Task 1, Steps 1, 2, 6 and 7; `tools/probes/` has only the key-free ones so far). Then set the long-chat limit `LONG_BYTES` in `src/chat.lua` from the POST probe (it is 150 KB for now).
-- Run the PENDING rows in `docs/device-checklist.md`: real Claude and OpenAI chats, streaming smoothness, memory after a long chat, the prompt-cache check, ids near midnight, the old-key import, opening a 150 KB chat, the frame rate while a program streams, and the cost of the run-over gate and of the save at send.
+- Run the PENDING rows in `docs/device-checklist.md`: real chats on each service, the list downloads and the picker (rows 17-22), streaming smoothness, memory after a long chat, the prompt-cache check, ids near midnight, the old-key import, opening a 150 KB chat, the frame rate while a program streams, and the cost of the run-over gate and of the save at send.
+
+## Gateways and the model picker (2026-10-26)
+
+- **The device run of the gateways' verify-first lists probe** (device checklist row 17). LISTS_OK, FILTER_MS and TWO_CONNECTIONS in `docs/research/2026-10-26-gateways-verify-first.md` are simulator figures. If a big list can't be downloaded well on the device, ship a short built-in list for that service (`ModelLists.BUILTIN`) and keep typed ids.
+- **The list scanner's speed on the device** (row 18). It is a small streaming JSON scanner (a flat pattern scan can't pair Vercel's ids with their types: 965 `"type"` keys for 480 models). No per-frame budget yet; add one if the frame rate drops while a list downloads.
+- **OpenCode's Mistral** rejects every effort but `high` with an HTTP 400 that has no message. A chat retries once without the effort field, but its title request doesn't, so a Mistral chat keeps its cut first message as its title.
+- The owner's OpenCode account answers `kimi-k3` with 403 "Model access is disabled": the picker lists it, and a chat on it shows "OpenCode refused this request." with that message.
+- Later (gateways design 13): prompt caching for Claude models reached through a gateway (OpenRouter needs `cache_control` markers, Vercel `caching: "auto"`); OpenCode's Claude, GPT and Gemini models through their own APIs; remembering a model per chat; prices or context sizes in the picker; `<think>` tags in a reply's text, if a model ever sends them.
 
 ## Before release
 
@@ -20,7 +28,6 @@ Open items left when LLM Chat 2.0 was merged (2026-10-26). The build was reviewe
   - A "sticky stop": once `run.stopping` is set, every gated function and callback wrapper raises `run.STOP` (as the firmware's own exit does). That closes every remaining way to ignore Stop that passes through a gated call (spec 9.7's list), leaving only loops that compute and touch nothing.
   - `env.load` reads a reader function's whole chunk itself, then loads the string, so an error in the reader no longer runs the runner's message handler and closes the gate early.
   - `callbackOf` returns early once `run.stopping` is set, so after one Stop no program callback runs again.
-- `tools/record_stream.py` doesn't scrub `call_` ids (OpenAI function-call ids).
 - The firmware's `picocalc.json` writes an empty table as `{}` (picodeck `lua_bridge_json.c`), so an empty array in a raw Claude block would go back as `{}` and Claude would reject the chat for good. No recorded block has one, and `raw_blocks_hold_no_empty_tables` (`tests/test_claude.lua`) guards it. Clean the raw blocks before sending if a later feature adds citations or tool blocks.
 - picodeck: Exit App during a slowed write leaves the SD bus at 1 MHz after the app exits. Once exit is requested, the firmware re-raises it before every Lua instruction, so the app's reset never runs, and the exit teardown doesn't restore the SD clock (only boot, a remount and a CPU clock change do). It is slow but safe, and most likely during the save at send. The firmware's store, updater and `download.lua` have the same gap. Fix in picodeck: call `sd_set_slow_mode(false)` in the Lua runner's teardown.
 - CI runs the tests under one Lua only. Add a job for `build/lua32`, the 32-bit-number build the device matches. `proxied_types_match_firmware` and the two download-library tests check nothing when `PICODECK_ROOT` is unset, so give CI a picodeck checkout.
@@ -30,7 +37,7 @@ Open items left when LLM Chat 2.0 was merged (2026-10-26). The build was reviewe
   - The long-chat check encodes every item after each reply, about 150 KB on the device. Keep a running size instead.
 - Smaller gaps:
   - `store:setKey` doesn't reject a newline in a key.
-  - `prefs()` accepts any type from a tampered `prefs.json`.
+  - `prefs()` checks `model` and `recent` (gateways design 9.1) but accepts any type for the other fields of a tampered `prefs.json`.
   - An unreadable (rather than corrupt) index or prefs file is treated as defaults and later overwritten, with no `.bad` copy.
   - The Claude request sends `output_config = {}` when no effort is set.
   - Program name extraction is loose (`-- see foo.lua for x` gives `seefoo.lua`).
