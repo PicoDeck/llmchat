@@ -1,0 +1,40 @@
+data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1792986368,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"role":"assistant","content":""}}]}
+
+data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1792986368,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"reasoning_content":"We"}}]}
+
+data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1792986368,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"reasoning_content":" need answer one"}}]}
+
+data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1792986368,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"reasoning_content":" sentence. Need concise"}}]}
+
+data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1792986368,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"reasoning_content":". Explain"}}]}
+
+data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1792986368,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"reasoning_content":" Rayleigh scattering shorter"}}]}
+
+data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1792986368,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"reasoning_content":" wavelengths scatter"}}]}
+
+data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1792986368,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"reasoning_content":" more. Sentence."}}]}
+
+data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1792986368,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"content":"The"}}]}
+
+data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1792986368,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"content":" sky is blue because air"}}]}
+
+data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1792986368,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"content":" molecules scatter shorter"}}]}
+
+data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1792986368,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"content":"-w"}}]}
+
+data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1792986368,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"content":"avelength blue light"}}]}
+
+data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1792986368,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"content":" from"}}]}
+
+data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1792986368,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"content":" the Sun"}}]}
+
+data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1792986368,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"content":" much"}}]}
+
+data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1792986368,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":null,"logprobs":null,"delta":{"content":" more than longer"}}]}
+
+data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1792986368,"model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":"length","logprobs":null,"delta":{}}]}
+
+data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1792986368,"model":"deepseek-v4.1-flash","choices":[],"usage":{"prompt_tokens":50,"completion_tokens":40,"total_tokens":90,"cache_read_input_tokens":0,"completion_tokens_details":{"reasoning_tokens":19},"cost":0.000063,"opencode":{"billing_source":"balance","list_cost":0.000063,"tokens":{"input":50,"output":40,"reasoning":19,"cache_read":0,"cache_write_5m":0,"cache_write_1h":0}}}}
+
+data: [DONE]
+

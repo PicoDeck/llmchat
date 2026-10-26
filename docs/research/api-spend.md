@@ -31,3 +31,14 @@ Written by tools/record_stream.py, a row per request. An error reply is not bill
 | probe opencode effort=low | 200 | minimax-m3 | 138 | 54 | $0.0001 |
 | probe opencode effort=low | 200 | qwen3.8-max | 61 | 59 | $0.0005 |
 | probe opencode effort=low | 200 | deepseek-v4-pro | 24 | 43 | $0.0002 |
+| vercel-text | 200 | deepseek/deepseek-v4.1-flash-1017 | 50 | 53 | $0.0001 |
+| vercel-reasoning | 200 | deepseek/deepseek-v4.1-flash-1017 | 51 | 53 | $0.0001 |
+| vercel-length | 200 | deepseek/deepseek-v4.1-flash-1017 | 50 | 40 | $0.0001 |
+| vercel-title | 200 | deepseek/deepseek-v4.1-flash-1017 | 67 | 64 | $0.0001 |
+| vercel-401 | 401 | - | 0 | 0 | $0.0000 |
+| opencode-text | 200 | deepseek-v4.1-flash | 50 | 43 | $0.0001 |
+| opencode-reasoning | 200 | deepseek-v4.1-flash | 51 | 51 | $0.0001 |
+| opencode-length | 200 | deepseek-v4.1-flash | 50 | 40 | $0.0001 |
+| opencode-title | 200 | deepseek-v4.1-flash | 67 | 64 | $0.0001 |
+| opencode-401 | 401 | - | 0 | 0 | $0.0000 |
+| openrouter-401 | 401 | - | 0 | 0 | $0.0000 |

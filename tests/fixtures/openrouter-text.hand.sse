@@ -1,0 +1,24 @@
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-fixture","provider":"DeepSeek","model":"deepseek/deepseek-v4.1-flash-1017","object":"chat.completion.chunk","created":1792990000,"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-fixture","provider":"DeepSeek","model":"deepseek/deepseek-v4.1-flash-1017","object":"chat.completion.chunk","created":1792990000,"choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning":"Rayleigh","reasoning_details":[{"type":"reasoning.text","text":"Rayleigh","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-fixture","provider":"DeepSeek","model":"deepseek/deepseek-v4.1-flash-1017","object":"chat.completion.chunk","created":1792990000,"choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning":" scattering.","reasoning_details":[{"type":"reasoning.text","text":" scattering.","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-fixture","provider":"DeepSeek","model":"deepseek/deepseek-v4.1-flash-1017","object":"chat.completion.chunk","created":1792990000,"choices":[{"index":0,"delta":{"role":"assistant","content":"The sky looks blue"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-fixture","provider":"DeepSeek","model":"deepseek/deepseek-v4.1-flash-1017","object":"chat.completion.chunk","created":1792990000,"choices":[{"index":0,"delta":{"role":"assistant","content":" because air scatters"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-fixture","provider":"DeepSeek","model":"deepseek/deepseek-v4.1-flash-1017","object":"chat.completion.chunk","created":1792990000,"choices":[{"index":0,"delta":{"role":"assistant","content":" short blue light"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-fixture","provider":"DeepSeek","model":"deepseek/deepseek-v4.1-flash-1017","object":"chat.completion.chunk","created":1792990000,"choices":[{"index":0,"delta":{"role":"assistant","content":" more than red."},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-fixture","provider":"DeepSeek","model":"deepseek/deepseek-v4.1-flash-1017","object":"chat.completion.chunk","created":1792990000,"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":"stop","native_finish_reason":"stop","logprobs":null}]}
+
+data: {"id":"gen-fixture","provider":"DeepSeek","model":"deepseek/deepseek-v4.1-flash-1017","object":"chat.completion.chunk","created":1792990000,"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":"stop","native_finish_reason":"stop","logprobs":null}],"usage":{"prompt_tokens":50,"completion_tokens":30,"total_tokens":80,"cost":2.14e-05,"is_byok":false,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},"completion_tokens_details":{"reasoning_tokens":6}}}
+
+data: [DONE]
+

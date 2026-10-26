@@ -1,0 +1,2 @@
+#status 401
+{"error":{"type":"server_error","message":"Upstream request failed: Invalid credential"}}

@@ -147,3 +147,108 @@ def test_dry_run_reads_no_key_and_sends_nothing(monkeypatch, capsys):
     assert out.startswith("POST https://api.openai.com/v1/responses")
     assert "Bearer <key>" in out
     assert not os.path.exists(rs.SPEND)
+
+
+GATEWAYS = {
+    "opencode": ("https://opencode.ai/inference/openai/v1/chat/completions", "deepseek-v4.1-flash"),
+    "openrouter": ("https://openrouter.ai/api/v1/chat/completions", "deepseek/deepseek-v4.1-flash-1017"),
+    "vercel": ("https://ai-gateway.vercel.sh/v1/chat/completions", "deepseek/deepseek-v4.1-flash-1017"),
+}
+
+
+def effort_of(service, body):
+    if service == "opencode":
+        assert "reasoning" not in body
+        return body["reasoning_effort"]
+    assert "reasoning_effort" not in body
+    return body["reasoning"]["effort"]
+
+
+@pytest.mark.parametrize("service", sorted(GATEWAYS))
+@pytest.mark.parametrize("case", ["text", "reasoning", "length", "401"])
+def test_cc_request_shape_streaming(service, case):
+    url, headers, body = rs.build(service, case)
+    assert url == GATEWAYS[service][0]
+    assert headers == {"Authorization": "Bearer <key>", "Content-Type": "application/json",
+                       "Accept": "text/event-stream", "User-Agent": "PicoDeck/1.0"}
+    assert body["model"] == GATEWAYS[service][1]
+    assert body["stream"] is True
+    assert body["stream_options"] == {"include_usage": True}
+    assert body["messages"][0] == {"role": "system", "content": rs.SYSTEM}
+    assert body["messages"][1]["role"] == "user" and len(body["messages"]) == 2
+    assert effort_of(service, body) == ("high" if case == "reasoning" else "low")
+    if case == "length":
+        assert body["max_tokens"] == 40
+    else:
+        assert "max_tokens" not in body
+
+
+@pytest.mark.parametrize("service", sorted(GATEWAYS))
+def test_cc_request_shape_title(service):
+    url, headers, body = rs.build(service, "title")
+    assert url == GATEWAYS[service][0]
+    assert headers == {"Authorization": "Bearer <key>", "Content-Type": "application/json",
+                       "User-Agent": "PicoDeck/1.0"}
+    assert "stream" not in body and "stream_options" not in body
+    assert body["max_tokens"] == 300
+    assert effort_of(service, body) == "low"
+    assert body["messages"] == [{"role": "user", "content": rs.TITLE_PROMPT}]
+
+
+def test_cc_unknown_case_is_refused():
+    with pytest.raises(SystemExit):
+        rs.build("vercel", "thinking")
+
+
+def test_anthropic_is_the_claude_recorder(monkeypatch):
+    assert rs.build("anthropic", "text") == rs.build("claude", "text")
+    seen = []
+    monkeypatch.setattr(rs, "load_key", lambda name: seen.append(name) or KEY)
+    monkeypatch.setattr(rs, "post", lambda provider, case, key: (200, CLAUDE_TEXT))
+    rs.main(["anthropic", "text"])
+    assert seen == ["claude"]  # the laptop's keys file names the Anthropic key claude=
+    assert Path(rs.FIXTURES, "claude-text.sse").exists()
+
+
+CC_USAGE = ('data: {"id":"gen-abc123","model":"google/gemini-3.8-flash","choices":[],'
+            '"usage":{"prompt_tokens":14,"completion_tokens":28,"cost":0.000116}}\n\ndata: [DONE]\n')
+
+
+def test_cc_spend_uses_usage_cost():
+    rs.log_spend("vercel", "text", 200, CC_USAGE)
+    assert spend_rows()[-1] == "| vercel-text | 200 | google/gemini-3.8-flash | 14 | 28 | $0.0001 |"
+
+
+def test_cc_spend_counts_byok_upstream_cost():
+    text = ('data: {"model":"deepseek/deepseek-v4.1-flash-1017","choices":[],"usage":{"prompt_tokens":44,'
+            '"completion_tokens":47,"cost":0,"is_byok":true,"cost_details":{"upstream_inference_cost":0.0003}}}\n')
+    rs.log_spend("vercel", "text", 200, text)
+    assert spend_rows()[-1].endswith("| 44 | 47 | $0.0003 |")
+
+
+def test_scrub_cc_ids():
+    text = "\n".join([
+        'data: {"id":"chatcmpl-9fA2bC3dE4","object":"chat.completion.chunk","model":"m"}',
+        'data: {"id":"gen-1792968275-AbCdEf","choices":[]}',
+        'data: {"id":"7f3e2a1b-0000-4c2d","generationId":"gen_01M5TKSBZ9955BRHHSKWJCJSJH"}',
+        '{"providerRequestId":"a5b5672acd75699f30383f9bc59fa43c","providerResponseId":"586af1ba-1e06",'
+        '"clientSessionId":"bcc5c3f7749f2af7aa2e5672917dcf5f","originalModelId":"deepseek/x"}',
+    ])
+    out = rs.scrub(text)
+    for gone in ("9fA2bC3dE4", "1792968275-AbCdEf", "7f3e2a1b-0000-4c2d", "gen_01M5TKSBZ9955BRHHSKWJCJSJH",
+                 "a5b5672acd75699f30383f9bc59fa43c", "586af1ba-1e06", "bcc5c3f7749f2af7aa2e5672917dcf5f"):
+        assert gone not in out, gone
+    assert '"originalModelId":"deepseek/x"' in out
+    assert '"object":"chat.completion.chunk"' in out
+
+
+def test_gateway_401_sends_the_recording_bad_key(monkeypatch):
+    def no_key(name):
+        raise AssertionError("the 401 case read a key")
+    monkeypatch.setattr(rs, "load_key", no_key)
+    sent = []
+    body = '{"error":{"message":"Authentication failed.","type":"authentication_error"}}'
+    monkeypatch.setattr(rs, "post", lambda provider, case, key: sent.append(key) or (401, body))
+    rs.main(["vercel", "401"])
+    assert sent == ["bad-key-for-recording"]
+    assert Path(rs.FIXTURES, "vercel-401.json").read_text() == "#status 401\n" + body

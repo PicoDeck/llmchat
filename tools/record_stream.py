@@ -1,22 +1,30 @@
 #!/usr/bin/env python3
 """Record a real API reply as a test fixture.
 
-    tools/record_stream.py <claude|openai> <case> [--dry-run]
+    tools/record_stream.py <anthropic|opencode|openrouter|vercel|openai> <case> [--dry-run]
 
-Cases: text, thinking (claude) / reasoning (openai), maxtokens (claude) /
-incomplete (openai), title, 401.
+Cases:
+  anthropic (or claude): text, thinking, maxtokens, title, 401.
+  opencode, openrouter, vercel (Chat Completions): text, reasoning, length,
+    title, 401.
+  openai: text, reasoning, incomplete, title, 401.
 
-Keys are read only from ~/.config/llmchat/keys.txt (lines `claude=...` and
-`openai=...`) and are never printed; a keys file that other users can read
-or write is refused. --dry-run prints the request (URL, headers with the key
-replaced by <key>, body) and sends nothing.
+Keys are read only from ~/.config/llmchat/keys.txt, one `name=value` line per
+service (the Anthropic key is the `claude=` line), and are never printed; a
+keys file that other users can read or write is refused. The 401 case sends
+a made-up key instead. --dry-run prints the request (URL, headers with the
+key replaced by <key>, body) and sends nothing.
 
-The raw response is saved to tests/fixtures/<provider>-<case>.sse (or .json
-for title and 401; an error reply gets a leading `#status N` line), with
-msg_/resp_/req_/rs_/fc_/item_ ids replaced by <prefix>_fixture and sk-...
-strings removed. Usage and cost are appended to docs/research/api-spend.md
-from the spec's price tables (a new log gets its table header first); an
-error reply is not billed, and gets a row with its status and $0.
+The raw response is saved to tests/fixtures/<service>-<case>.sse (or .json
+for title and 401; an error reply gets a leading `#status N` line).
+Anthropic recordings keep their `claude-` names. Ids are scrubbed:
+msg_/resp_/req_/rs_/fc_/item_ ids become <prefix>_fixture, chatcmpl-/gen-
+ids and the values of id-like keys become fixture, and sk-... strings are
+removed. Usage and cost are appended to docs/research/api-spend.md: the
+gateways report the cost themselves (usage.cost, plus the upstream cost of
+a request that ran on the owner's own provider key); the others are priced
+from the spec's tables. A new log gets its table header first; an error
+reply is not billed, and gets a row with its status and $0.
 """
 import json
 import os
@@ -96,12 +104,55 @@ def openai_request(case):
     return url, headers, body
 
 
+# Chat Completions gateways (gateways spec 4, 6.1): URL, effort field, model.
+GATEWAYS = {
+    "opencode": ("https://opencode.ai/inference/openai/v1/chat/completions", "reasoning_effort",
+                 "deepseek-v4.1-flash"),
+    "openrouter": ("https://openrouter.ai/api/v1/chat/completions", "reasoning",
+                   "deepseek/deepseek-v4.1-flash-1017"),
+    "vercel": ("https://ai-gateway.vercel.sh/v1/chat/completions", "reasoning",
+               "deepseek/deepseek-v4.1-flash-1017"),
+}
+# The firmware's own User-Agent: Cloudflare in front of opencode.ai answers
+# urllib's default with a 403 page (docs/research/2026-10-26-gateways-verify-first.md).
+USER_AGENT = "PicoDeck/1.0"
+BAD_KEY = "bad-key-for-recording"
+
+
+def cc_request(service, case):
+    url, field, model = GATEWAYS[service]
+
+    def effort(e):
+        return {field: e} if field == "reasoning_effort" else {field: {"effort": e}}
+    headers = {"Authorization": "Bearer <key>", "Content-Type": "application/json",
+               "Accept": "text/event-stream", "User-Agent": USER_AGENT}
+    body = {"model": model, "stream": True, "stream_options": {"include_usage": True},
+            "messages": [{"role": "system", "content": SYSTEM},
+                         {"role": "user", "content": QUESTION}]}
+    body.update(effort("low"))
+    if case == "reasoning":
+        body["messages"][1]["content"] = MATH
+        body.update(effort("high"))
+    elif case == "length":
+        body["max_tokens"] = 40
+    elif case == "title":
+        del headers["Accept"]
+        body = {"model": model, "max_tokens": 300,
+                "messages": [{"role": "user", "content": TITLE_PROMPT}]}
+        body.update(effort("low"))
+    elif case not in ("text", "401"):
+        raise SystemExit("unknown %s case: %s" % (service, case))
+    return url, headers, body
+
+
 def build(provider, case):
-    if provider == "claude":
+    if provider in ("claude", "anthropic"):
         return claude_request(case)
+    if provider in GATEWAYS:
+        return cc_request(provider, case)
     if provider == "openai":
         return openai_request(case)
-    raise SystemExit("provider must be claude or openai")
+    raise SystemExit("service must be anthropic, opencode, openrouter, vercel or openai")
 
 
 def shown(path):
@@ -134,10 +185,15 @@ def load_key(provider):
 # rs_, fc_ and item_ ids as well): the API's own names that start the same
 # way, such as item_id and item_reference, have none.
 ID = re.compile(r"\b(msg|resp|req|rs|fc|item)_(?=[A-Za-z0-9]*[0-9])[A-Za-z0-9]+")
+# Chat Completions chunk ids, and Vercel's routing ids.
+CC_ID = re.compile(r"\b(chatcmpl|gen)-[A-Za-z0-9_\-]+")
+ID_KEYS = re.compile(r'"(id|generationId|providerRequestId|providerResponseId|clientSessionId)":"(?![^"]*fixture")[^"]*"')
 
 
 def scrub(text):
     text = ID.sub(r"\1_fixture", text)
+    text = CC_ID.sub(r"\1-fixture", text)
+    text = ID_KEYS.sub(r'"\1":"fixture"', text)
     return re.sub(r"sk-[A-Za-z0-9_\-]+", "<removed>", text)
 
 
@@ -153,9 +209,11 @@ def post(provider, case, key):
 
 
 def usage_of(provider, text):
-    """(input_tokens, output_tokens, model) from a saved reply, or None."""
+    """(input_tokens, output_tokens, model, cost) from a saved reply. cost is
+    the reply's own (the gateways' usage.cost), or None to price it here."""
     inp = out = 0
     model = ""
+    cost = None
     if text.lstrip().startswith("{"):
         objs = [json.loads(text)]
     else:
@@ -165,9 +223,13 @@ def usage_of(provider, text):
         model = r.get("model", model) if isinstance(r, dict) else model
         for u in (r.get("usage") if isinstance(r, dict) else None), o.get("usage"):
             if isinstance(u, dict):
-                inp = u.get("input_tokens", inp) or inp
-                out = u.get("output_tokens", out) or out
-    return inp, out, model
+                inp = u.get("input_tokens", u.get("prompt_tokens", inp)) or inp
+                out = u.get("output_tokens", u.get("completion_tokens", out)) or out
+                if "cost" in u:
+                    cost = float(u.get("cost") or 0)
+                    if u.get("is_byok"):
+                        cost += float((u.get("cost_details") or {}).get("upstream_inference_cost") or 0)
+    return inp, out, model, cost
 
 
 SPEND_HEADER = ("# API spend\n\n"
@@ -179,11 +241,12 @@ SPEND_HEADER = ("# API spend\n\n"
 def log_spend(provider, case, status, text):
     if status == 200:
         try:
-            inp, out, model = usage_of(provider, text)
+            inp, out, model, cost = usage_of(provider, text)
         except (ValueError, KeyError):
             return
-        pin, pout = PRICES.get(model, (0, 0))
-        cost = (inp * pin + out * pout) / 1e6
+        if cost is None:
+            pin, pout = PRICES.get(model, (0, 0))
+            cost = (inp * pin + out * pout) / 1e6
     else:
         inp, out, model, cost = 0, 0, "-", 0
     os.makedirs(os.path.dirname(SPEND), exist_ok=True)
@@ -204,6 +267,8 @@ def main(argv):
     if len(args) != 2:
         raise SystemExit(__doc__)
     provider, case = args
+    if provider == "anthropic":
+        provider = "claude"  # the key line and the fixture names
     url, headers, body = build(provider, case)
     if dry:
         print("POST " + url)
@@ -211,7 +276,7 @@ def main(argv):
             print("%s: %s" % (k, v))
         print(json.dumps(body, indent=2))
         return
-    key = "bad-key" if case == "401" else load_key(provider)
+    key = BAD_KEY if case == "401" else load_key(provider)
     status, text = post(provider, case, key)
     text = scrub(text.replace(key, "<removed>"))
     is_json = case in ("title", "401")

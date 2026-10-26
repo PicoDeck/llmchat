@@ -7,10 +7,15 @@ local SSE_FILES = {
     "claude-fallback.hand", "claude-error.hand",
     "openai-text", "openai-reasoning", "openai-incomplete", "openai-refusal.hand",
     "openai-failed.hand", "openai-error.hand",
+    "vercel-text", "vercel-reasoning", "vercel-length",
+    "opencode-text", "opencode-reasoning", "opencode-length",
+    "openrouter-text.hand", "openrouter-error.hand",
 }
 local JSON_FILES = {
     { "claude-title", 200 }, { "claude-401", 401 }, { "openai-title", 200 },
     { "openai-401", 401 }, { "openai-quota.hand", 429 },
+    { "vercel-title", 200 }, { "vercel-401", 401 }, { "opencode-title", 200 },
+    { "opencode-401", 401 }, { "openrouter-401", 401 },
 }
 
 return {
@@ -51,6 +56,11 @@ return {
         for _, name in ipairs(SSE_FILES) do
             local _, body = Fixture.read(name .. ".sse")
             T.ok(not body:find("sk-", 1, true), name)
+        end
+        for _, f in ipairs(JSON_FILES) do
+            local _, body = Fixture.read(f[1] .. ".json")
+            T.ok(not body:find("sk-", 1, true), f[1])
+            T.ok(not body:find("bad-key-for-recording", 1, true), f[1])
         end
     end,
 }

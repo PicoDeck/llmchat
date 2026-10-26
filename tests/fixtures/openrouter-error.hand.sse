@@ -1,0 +1,8 @@
+data: {"id":"gen-fixture","provider":"DeepSeek","model":"deepseek/deepseek-v4.1-flash-1017","object":"chat.completion.chunk","created":1792990000,"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-fixture","provider":"DeepSeek","model":"deepseek/deepseek-v4.1-flash-1017","object":"chat.completion.chunk","created":1792990000,"choices":[{"index":0,"delta":{"role":"assistant","content":"The sky looks"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-fixture","provider":"DeepSeek","model":"deepseek/deepseek-v4.1-flash-1017","object":"chat.completion.chunk","created":1792990000,"choices":[{"index":0,"delta":{"role":"assistant","content":" blue because"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-fixture","object":"chat.completion.chunk","created":1792990000,"model":"deepseek/deepseek-v4.1-flash-1017","provider":"DeepSeek","error":{"code":"server_error","message":"Provider disconnected unexpectedly"},"choices":[{"index":0,"delta":{"content":""},"finish_reason":"error"}]}
+
