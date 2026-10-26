@@ -213,6 +213,61 @@ return {
         end
     end,
 
+    -- Most of a reasoning model's stream is thinking, one ~300-byte event a
+    -- token, and decoding each ran slower on the device than they arrive.
+    -- While the model is thinking, an event that can't carry text, a finish,
+    -- usage or an error is passed over without decoding.
+    thinking_events_are_not_decoded = function()
+        local decodes = 0
+        local codec = { encode = J.encode, decode = function(s) decodes = decodes + 1; return J.decode(s) end }
+        local rec = recorder()
+        local feed = P.vercel.parser(codec, rec.handlers)
+        local sse = SSE.new(feed)
+        local function r(text)
+            return chunk({ choices = { { index = 0, delta = { reasoning = text,
+                reasoning_details = { { type = "reasoning.text", text = text } } }, finish_reason = J.null } } })
+        end
+        sse:feed(r("We") .. r(" need") .. r(" a die")
+            .. chunk({ choices = { { index = 0, delta = { content = "a" } } } })
+            .. chunk({ choices = { { index = 0, delta = { content = "b" }, finish_reason = "stop" } } })
+            .. chunk({ choices = {}, usage = { prompt_tokens = 5, completion_tokens = 7 } })
+            .. "data: [DONE]\n\n")
+        T.eq(rec.thinking, 1)
+        T.eq(table.concat(rec.text), "ab")
+        T.eq(rec.done.stop, "end")
+        T.eq(rec.done.usage.completion_tokens, 7)
+        T.eq(decodes, 4, "the first thinking event, two text events and the usage")
+    end,
+
+    -- The pass-over is only while thinking: thinking that resumes after text
+    -- is noticed again, and an event with text in it is always decoded.
+    thinking_after_text_and_mixed_events = function()
+        local function d(delta) return chunk({ choices = { { index = 0, delta = delta } } }) end
+        local r = runBody(P.openrouter, d({ reasoning = "r1" }) .. d({ reasoning = 'say "usage" and "error"' })
+            .. d({ content = "a" }) .. d({ reasoning = "r3" })
+            .. d({ reasoning = 'the "content": field', content = "b" })
+            .. chunk({ choices = { { index = 0, delta = {}, finish_reason = "stop" } } })
+            .. "data: [DONE]\n\n")
+        T.same(r.order, { "thinking", "text", "thinking", "text" })
+        T.eq(r.full, "ab")
+        T.eq(#r.errors, 0)
+        T.eq(r.done.stop, "end")
+    end,
+
+    reasoning_fixtures_decode_less = function()
+        for _, c in ipairs({ { P.vercel, "vercel-reasoning.sse" }, { P.opencode, "opencode-reasoning.sse" } }) do
+            local decodes, events = 0, 0
+            local codec = { encode = J.encode, decode = function(s) decodes = decodes + 1; return J.decode(s) end }
+            local _, body = Fixture.read(c[2])
+            for _ in body:gmatch("\ndata: ") do events = events + 1 end
+            local rec = recorder()
+            local sse = SSE.new((c[1].parser(codec, rec.handlers)))
+            sse:feed(body)
+            T.ok(rec.thinking >= 1 and #rec.text > 0 and rec.done, c[2])
+            T.ok(decodes < events, c[2] .. ": " .. decodes .. " decodes for " .. events .. " events")
+        end
+    end,
+
     unknown_chunks_ignored = function()
         local r = runBody(P.vercel, "data: not json\n\n" .. chunk({ object = "something.else" })
             .. chunk({ choices = { { index = 0, delta = { content = "ok", role = "assistant" }, finish_reason = "stop" } } })

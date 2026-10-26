@@ -202,6 +202,7 @@ One module serves the three gateways from a table of their differences (section 
 Each `data:` line is one JSON chunk. `[DONE]` ends the stream.
 - `choices[1].delta.content`: visible text.
 - A non-empty `delta.reasoning`, `delta.reasoning_content` or `delta.reasoning_details`: `handlers.thinking()`. The reasoning text isn't shown or kept.
+  - Once thinking, an event with no `"content"`, `"usage"` or `"error"` key and no string `finish_reason` is passed over without decoding (added 2026-10-26). The gateways send one event of about 300 bytes per token, and decoding every one ran at 40-45 KB/s on the device against 60-85 KB/s arriving.
 - `choices[1].finish_reason`:
   - `stop`: end.
   - `length`: the main spec's "Reply cut off at the length limit."

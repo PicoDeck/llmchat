@@ -24,6 +24,17 @@ end
 
 local STOPS = { stop = "end", length = "length", content_filter = "refusal" }
 
+-- True when an event can carry nothing the parser acts on once the model is
+-- thinking: no text, usage, error or finish reason. Its keys would appear
+-- as these exact quoted names (a quote inside a string value is escaped, so
+-- \"content\" in thinking text doesn't match). A reasoning model streams
+-- one ~300-byte event per token, and decoding every one ran slower on the
+-- device than they arrive.
+local function quiet(data)
+    return not data:find('"content"', 1, true) and not data:find('"usage"', 1, true)
+        and not data:find('"error"', 1, true) and not data:find('"finish_reason"%s*:%s*"')
+end
+
 local function nonEmpty(v)
     if type(v) == "string" then return v ~= "" end
     return type(v) == "table" and next(v) ~= nil
@@ -89,6 +100,7 @@ function CC.new(service)
         local function feed(_, data)
             if ended then return end
             if data == "[DONE]" then return complete() end
+            if thinking and quiet(data) then return end
             local ok, ev = pcall(json.decode, data)
             if not ok or type(ev) ~= "table" then return end
             if type(ev.error) == "table" then
