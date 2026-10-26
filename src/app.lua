@@ -24,6 +24,7 @@ App.SCREENS = {
     chat = "src.screens.chat",
     lists = "src.screens.lists",
     settings = "src.screens.settings",
+    picker = "src.screens.picker",
     programError = "src.screens.program_error",
 }
 

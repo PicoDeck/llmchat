@@ -51,6 +51,22 @@ local function noteRows(text, spec, color)
     return rows, y
 end
 
+-- The model switch line (gateways spec 5.2, mockup 13): its text dim and
+-- centred between two thin rules.
+local function switchRows(text, spec)
+    local max = TEXT_W - 40
+    while #text > 3 and measure(text, spec.adv) > max do text = text:sub(1, -4) .. ".." end
+    local w = measure(text, spec.adv)
+    local x = TEXT_X + (TEXT_W - w) // 2
+    local row = {
+        y = 0, h = spec.rowH, kind = "switch",
+        r1x = TEXT_X, r1w = math.max(0, x - 6 - TEXT_X),
+        r2x = x + w + 6, r2w = math.max(0, TEXT_X + TEXT_W - (x + w + 6)),
+        segs = { { x = x, text = text, face = "regular", color = "dim" } },
+    }
+    return { row }, spec.rowH
+end
+
 function S.new(app)
     local self = setmetatable({
         app = app, pc = app.pc, chat = app.chat, theme = app.theme,
@@ -145,6 +161,9 @@ function S:entryFor(it, spec)
         e.provider = it.provider
         e.rows, e.h = Layout.assistant(Markdown.parse(it.text or ""), spec, TEXT_W, it.programs)
         if #e.rows == 0 then e = nil end
+    elseif it.kind == "model" then
+        e.kind = "note"
+        e.rows, e.h = switchRows(it.text or "", spec)
     else
         e.kind = "note"
         e.rows, e.h = noteRows(it.text or "", spec, it.error and "error" or "dim")
@@ -317,6 +336,8 @@ function S:key(ev)
     elseif Is("F3") then
         local name = chat.state == "idle" and chat:lastProgram()
         if name and app.runProgram then app:runProgram(name) end
+    elseif Is("F4") then
+        app:go("picker") -- at any time; a pick applies from the next message
     elseif Is("F5") then
         app:go("settings")
     else
@@ -367,6 +388,9 @@ function S:drawRow(row, ry, e)
     local kind = row.kind
     if kind == "rule" then
         d.fillRect(row.x, ry + 3, row.w, 1, th.dim)
+    elseif kind == "switch" then
+        d.fillRect(row.r1x, ry + row.h // 2, row.r1w, 1, th.rule)
+        d.fillRect(row.r2x, ry + row.h // 2, row.r2w, 1, th.rule)
     elseif kind == "panel-top" then
         d.fillRect(row.px, ry, row.pw, row.h, th.panelBorder)
         d.fillRect(row.px + 1, ry + 1, row.pw - 2, row.h - 1, th.panelHead)
@@ -420,7 +444,7 @@ function S:drawIntro()
     local lx = (320 - w) // 2
     d.fillRect(lx, 134, 4, 4, th.bar[sid] or th.dim)
     d.drawText(lx + 8, 132, label, th.dim, false)
-    local keys = { { "F1", "Recent chats" }, { "F5", "Settings" } }
+    local keys = { { "F1", "Recent chats" }, { "F4", "Model" }, { "F5", "Settings" } }
     local total = 0
     for _, k in ipairs(keys) do total = total + 16 + 6 + #k[2] * 6 end
     total = total + 12
