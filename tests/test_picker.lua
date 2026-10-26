@@ -170,6 +170,13 @@ return {
         T.eq(Picker.step({}, 1, 1), 1)
     end,
 
+    find_near = function()
+        local rows = Picker.build(input())
+        T.eq(Picker.find(rows, "vercel/deepseek/deepseek-v4.1-flash-1017"), 2)
+        T.eq(Picker.find(rows, "vercel/deepseek/deepseek-v4.1-flash-1017", 17), 17, "the Vercel group's copy")
+        T.eq(Picker.find(rows, "vercel/deepseek/deepseek-v4.1-flash-1017", 4), 2, "the nearer one")
+    end,
+
     first_selectable = function()
         T.eq(Picker.first((Picker.build(input()))), 2)
         T.eq(Picker.first({}), nil)

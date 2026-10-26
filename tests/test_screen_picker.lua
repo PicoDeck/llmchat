@@ -143,6 +143,40 @@ return {
         T.eq(app.store:prefs().model, "anthropic/claude-opus-5-5")
     end,
 
+    -- The no-key row says "add one in Settings (F5)": F5 goes there.
+    f5_opens_settings = function()
+        local F, app = setup()
+        press(F, app, "f4")
+        T.ok(has(F, "No key yet: add one in Settings (F5)"))
+        press(F, app, "f5")
+        T.eq(app.screenName, "settings")
+        T.eq(F.liveConns(), 0, "the list download was cancelled")
+    end,
+
+    -- A list that arrives while you browse keeps you where you are, not on
+    -- the Recent copy of the same model.
+    selection_stays_put_when_a_list_arrives = function()
+        local F, app = setup({ seed = function(st)
+            st:setKey("opencode", "oc-secret")
+            saveList(st, "vercel")
+            st:pushRecent("vercel/google/gemini-3.8-flash")
+            st:savePrefs()
+        end })
+        press(F, app, "f4")
+        local s = app.screens.picker
+        local recentAt = s.sel -- the current model's row (Anthropic's: it isn't in Recent)
+        local groupAt
+        for i, r in ipairs(s.rows) do
+            if r.kind == "model" and r.id == "vercel/google/gemini-3.8-flash" then groupAt = i end
+        end
+        T.ok(groupAt and groupAt > recentAt + 1, "the Vercel group's copy")
+        s.sel = groupAt
+        for _ = 1, 30 do frames(app) end -- OpenCode's list arrives
+        T.ok(F.files[D .. "/models/opencode.txt"], "the list arrived")
+        T.eq(s.rows[s.sel].id, "vercel/google/gemini-3.8-flash")
+        T.ok(s.sel > 3, "pulled up to Recent: row " .. s.sel)
+    end,
+
     use_typed_id = function()
         local F, app = setup()
         press(F, app, "f4")

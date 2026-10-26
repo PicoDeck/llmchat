@@ -1,7 +1,8 @@
 -- The model picker (gateways spec 5.1, mockups 09-11): a filter field, then
 -- the models in groups (src/picker.lua makes the rows). Typing filters,
 -- Up/Down move (Shift for a page), Enter picks and goes back to the chat,
--- Esc clears the filter or goes back, F2 downloads the lists again.
+-- Esc clears the filter or goes back, F2 downloads the lists again, F5
+-- opens Settings (the no-key rows send you there).
 -- Everything is drawn in 6x8.
 local Keys = require("src.keys")
 local Services = require("src.services")
@@ -80,7 +81,7 @@ function S:rebuild(keepId)
         current = full, recent = self.app.store:prefs().recent,
         groups = self:groups(), filter = self.field:getText(),
     }, self.cache)
-    self.sel = (keepId and Picker.find(self.rows, keepId)) or Picker.first(self.rows) or 1
+    self.sel = (keepId and Picker.find(self.rows, keepId, self.sel)) or Picker.first(self.rows) or 1
     self:reveal()
 end
 
@@ -168,6 +169,8 @@ function S:key(ev)
         end
         self.fetcher:start(ids)
         self:rebuild(self.rows[self.sel] and self.rows[self.sel].id)
+    elseif is("F5") then
+        app:go("settings")
     elseif is("TAB") then
         return -- no key uses Tab
     else

@@ -264,11 +264,16 @@ function Chat:send(text)
         self.items[#self.items + 1] = { role = "note", kind = "model", text = "now " .. full }
     end
     self.items[#self.items + 1] = { role = "user", text = text }
-    local store = self.deps.store
-    store:pushRecent(full)
-    store:savePrefs()
     self:_bump()
     self:_start()
+    -- Recent (gateways spec 9.1), written once the request is on its way and
+    -- only when this model wasn't first already: no card write ahead of the
+    -- first words.
+    local store = self.deps.store
+    if store:prefs().recent[1] ~= full then
+        store:pushRecent(full)
+        store:savePrefs()
+    end
     -- On the card while its reply arrives (after the request is on its way,
     -- so the save adds no wait before the first words): a reply that never
     -- finishes doesn't take the question with it.
@@ -411,7 +416,12 @@ function Chat:_complete(info)
         role = "assistant", provider = self.providerId, model = self.model, text = live.text,
     }
     if info.raw and #info.raw > 0 then item.raw = info.raw end
-    if live.text ~= "" or item.raw then self.items[#self.items + 1] = item end
+    if live.text ~= "" or item.raw then
+        self.items[#self.items + 1] = item
+    elseif info.stop == "end" then
+        -- only reasoning came (gateways Review Focus 5): nothing to keep, but say so
+        self:_push("info", Services.short(self.model) .. " sent no text.")
+    end
     if info.stop == "length" then
         self:_push("info", "Reply cut off at the length limit.")
     elseif info.stop == "refusal" then

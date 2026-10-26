@@ -132,10 +132,17 @@ function M.first(rows)
     return nil
 end
 
--- The first model row for `full` (Recent's, when it is there), or nil.
-function M.find(rows, full)
-    for i, r in ipairs(rows) do if r.kind == "model" and r.id == full then return i end end
-    return nil
+-- The model row for `full` nearest to row `near` (the first one, Recent's
+-- when it is there, without `near`), or nil.
+function M.find(rows, full, near)
+    local best
+    for i, r in ipairs(rows) do
+        if r.kind == "model" and r.id == full then
+            if not near then return i end
+            if not best or math.abs(i - near) < math.abs(best - near) then best = i end
+        end
+    end
+    return best
 end
 
 return M

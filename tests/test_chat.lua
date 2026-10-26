@@ -693,6 +693,29 @@ return {
         run(F, chat)
     end,
 
+    -- The prefs write for Recent waits until the request is on its way (no
+    -- card write before the first words), and is skipped when the model is
+    -- already first.
+    recent_saved_after_the_request_and_only_on_change = function()
+        local F, chat, store = setup({ model = "vercel/google/gemini-3.8-flash", responder = byPath() })
+        local writes = {}
+        local open = F.pc.fs.open
+        F.pc.fs.open = function(path, mode)
+            if path == D .. "/prefs.json.tmp" then writes[#writes + 1] = #F.requests end
+            return open(path, mode)
+        end
+        chat:open(nil)
+        chat:send("hi")
+        T.eq(store:prefs().recent[1], "vercel/google/gemini-3.8-flash")
+        T.ok(#writes >= 1, "Recent saved")
+        for _, n in ipairs(writes) do T.ok(n >= 1, "prefs written before the request went out") end
+        run(F, chat)
+        writes = {}
+        chat:send("again")
+        T.same(writes, {}, "prefs written though Recent didn't change")
+        run(F, chat)
+    end,
+
     -- Review Focus 4: the key is removed in Settings after the model was picked.
     no_key_note = function()
         local full = "vercel/google/gemini-3.8-flash"
@@ -730,6 +753,9 @@ return {
         seen = run(F, chat)
         T.ok(seen.thinking, "showed thinking")
         for _, it in ipairs(chat.items) do T.ok(it.role ~= "assistant", "an empty reply was stored") end
+        local note = hasNote(chat, "deepseek-v4.1-flash-1017 sent no text.")
+        T.ok(note, "no word about the missing reply")
+        T.ok(not note.error, "an info note, not an error")
         F.responder = byPath()
         T.eq(chat:send("again"), true)
         local sent = #F.requests
