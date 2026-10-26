@@ -1,7 +1,7 @@
 local T = require("tests.t")
 local Fake = require("tests.fakepc")
 local Store = require("src.store")
-local Claude = require("src.providers.claude")
+local S = require("src.screens.settings")
 
 local ID = "net.picodeck.llmchat"
 local D = "/data/" .. ID
@@ -13,7 +13,7 @@ local function setup(opts)
     _G.picocalc = F.pc
     package.loaded["src.widgets"] = nil
     local seed = Store.new(F.pc.fs, F.pc.json, D)
-    if opts.key ~= false then seed:setKey("claude", CLAUDE_KEY) end
+    if opts.key ~= false then seed:setKey("anthropic", CLAUDE_KEY) end
     if opts.seed then opts.seed(seed) end
     local app = require("src.app").new(F.pc, ID, "/apps/llmchat")
     app:frame()
@@ -27,85 +27,57 @@ local function press(F, app, ...)
     app:frame()
 end
 
--- Focus row n (1 Provider .. 7 Instructions).
+-- Focus row n (1 Anthropic .. 4 Vercel, 5 Thinking .. 7 Instructions).
 local function focus(F, app, s, n)
     while s.focus < n do press(F, app, "down") end
     while s.focus > n do press(F, app, "up") end
 end
 
 return {
+    -- Gateways spec 5.4 (mockup 14): a key per service, then the replies'
+    -- settings, each group under its label; the Provider and Model rows are gone.
     rows_shown = function()
         local F = setup()
         local s = F.screenText()
-        for _, label in ipairs({ "Provider", "Model", "Claude key", "OpenAI key", "Thinking", "Reply font", "Instructions" }) do
-            T.ok(s:find(label, 1, true), label)
+        local function yOf(label)
+            for i, t in ipairs(F.texts) do if t == label then return F.textYs[i] end end
         end
-        T.ok(s:find("Claude", 1, true) and s:find("OpenAI", 1, true))
+        local last = -1
+        for _, label in ipairs({ "API keys", "Anthropic", "OpenCode", "OpenRouter", "Vercel", "Replies",
+                                 "Thinking", "Reply font", "Instructions" }) do
+            local y = yOf(label)
+            T.ok(y and y > last, label .. " below the one before")
+            last = y
+        end
+        T.ok(not s:find("Provider", 1, true) and not s:find("Model", 1, true))
         T.ok(s:find("keys.txt", 1, true), s)
         T.ok(s:find("[H] Settings", 1, true))
         T.ok(s:find("Up/Down move", 1, true))
         for _, t in ipairs(F.texts) do T.ok(not t:find("[^\32-\126\n]"), t) end
     end,
-    provider_radio_switches = function()
-        local F, app, s = setup()
-        T.eq(#F.radios, 2)
-        T.ok(F.radios[1].selected and not F.radios[2].selected)
-        press(F, app, "right")
-        T.eq(app.store:prefs().provider, "openai")
-        T.ok(F.radios[2].selected and not F.radios[1].selected)
-        T.eq(s.model.options[1], "GPT-6 Luna")
-        press(F, app, "left")
-        T.eq(app.store:prefs().provider, "claude")
-        T.eq(s.model.options[1], "Opus 5.5")
-        press(F, app, "enter") -- Enter toggles too
-        T.eq(app.store:prefs().provider, "openai")
+    section_labels_are_dim_with_a_rule = function()
+        local F, app = setup()
+        local labels = {}
+        for i, t in ipairs(F.texts) do
+            if t == "API keys" or t == "Replies" then labels[#labels + 1] = { i = i, t = t } end
+        end
+        T.eq(#labels, 2)
+        for _, l in ipairs(labels) do
+            T.eq(F.textColors[l.i], app.theme.dim, l.t .. " is dim")
+            local y = F.textYs[l.i]
+            local rule
+            for _, r in ipairs(F.rects) do
+                if r.h == 1 and r.y >= y and r.y <= y + 8 and r.c == app.theme.rule then rule = r end
+            end
+            T.ok(rule, l.t .. " has a rule")
+        end
     end,
-    model_select_lists_models = function()
-        local F, app, s = setup()
-        T.eq(#s.model.options, 5)
-        T.same(s.model.options, { "Opus 5.5", "Sonnet 5.5", "Haiku 5.5", "Fable 5.1", "Custom..." })
-        focus(F, app, s, 2)
-        press(F, app, "enter")
-        T.ok(s.model:isExpanded())
-        press(F, app, "down", "enter")
-        T.eq(app.store:prefs().models.claude, "claude-sonnet-5-5")
-        T.ok(not s.model:isExpanded())
-        T.ok(F.screenText():find("Sonnet 5.5", 1, true))
-    end,
-    model_custom_asks_for_an_id = function()
-        local F, app, s = setup()
-        focus(F, app, s, 2)
-        F.inputs = { " my-model.2 " }
-        press(F, app, "enter")
-        for _ = 1, 4 do press(F, app, "down") end
-        press(F, app, "enter")
-        T.ok(F.lastPrompt:lower():find("model", 1, true))
-        T.eq(app.store:prefs().models.claude, "my-model.2")
-        T.eq(s.model.options[5], "my-model.2")
-        T.eq(s.model.options[6], "Custom...")
-        T.eq(s.model.selected, 5)
-    end,
-    model_custom_cancel_keeps_the_model = function()
-        local F, app, s = setup()
-        focus(F, app, s, 2)
-        press(F, app, "enter")
-        for _ = 1, 4 do press(F, app, "down") end
-        press(F, app, "enter") -- textInput gives nil
-        T.eq(app.store:prefs().models.claude, "claude-opus-5-5")
-        T.eq(s.model.selected, 1)
-        F.inputs = { "bad id!" }
-        press(F, app, "enter")
-        for _ = 1, 4 do press(F, app, "down") end
-        press(F, app, "enter")
-        T.eq(app.store:prefs().models.claude, "claude-opus-5-5")
-        T.ok(F.hasToast("model id"))
-    end,
-    custom_model_in_prefs_is_shown = function()
-        local F, app, s = setup({ seed = function(st)
-            local p = st:prefs(); p.models.claude = "claude-future-9"; st:savePrefs()
-        end })
-        T.eq(s.model.options[5], "claude-future-9")
-        T.eq(s.model.selected, 5)
+    mask_keeps_a_known_prefix = function()
+        T.eq(S.mask("sk-ant-abcdefgh3f9a", 40), "sk-ant-********3f9a")
+        T.eq(S.mask("sk-or-v1-abcdefgh77e0", 40), "sk-or-v1-********77e0")
+        T.eq(S.mask("sk-abcdefgh8c1d", 40), "sk-********8c1d")
+        T.eq(S.mask("vck_abcdefgh1234", 40), "************1234")
+        T.eq(S.mask("abc", 40), "***")
     end,
     key_masked = function()
         local F = setup()
@@ -113,11 +85,13 @@ return {
         T.ok(s:find("sk-ant-" .. ("*"):rep(20) .. "3f9a", 1, true), s)
         T.ok(not s:find(CLAUDE_KEY, 1, true))
         T.ok(not s:find("xxxxx", 1, true))
-        T.ok(s:find("not set", 1, true))
+        local n = 0
+        for _ in s:gmatch("not set") do n = n + 1 end
+        T.eq(n, 3, "the three other services")
     end,
     long_key_mask_fits_the_field = function()
         local key = "sk-ant-api03-" .. ("a"):rep(90) .. "wxyz"
-        local F = setup({ seed = function(st) st:setKey("claude", key) end })
+        local F = setup({ seed = function(st) st:setKey("anthropic", key) end })
         local f
         for _, t in ipairs(F.fields) do if t.text:find("wxyz", 1, true) then f = t end end
         T.ok(f, "masked key drawn")
@@ -132,47 +106,60 @@ return {
         press(F, app)
         T.ok(F.screenText():find("sk-new-1234", 1, true), "clear text while editing")
         press(F, app, "enter")
-        T.eq(app.store:keys().openai, "sk-new-1234")
+        T.eq(app.store:keys().vercel, "sk-new-1234")
         local text = F.files[D .. "/keys.txt"]
-        T.ok(text:find("openai=sk-new-1234", 1, true), text)
-        T.ok(text:find("claude=" .. CLAUDE_KEY, 1, true))
+        T.ok(text:find("vercel=sk-new-1234", 1, true), text)
+        T.ok(text:find("anthropic=" .. CLAUDE_KEY, 1, true))
         local shown = F.screenText()
         T.ok(not shown:find("sk-new-1234", 1, true), "masked again")
         T.ok(shown:find("sk-" .. ("*"):rep(#"sk-new-1234" - 3 - 4) .. "1234", 1, true), shown)
     end,
     key_accepts_512_chars = function()
         local F, app, s = setup()
-        focus(F, app, s, 4)
+        focus(F, app, s, 2)
         press(F, app, "enter")
         F.type("sk-" .. ("k"):rep(600))
         press(F, app, "enter")
-        T.eq(#app.store:keys().openai, 512)
+        T.eq(#app.store:keys().opencode, 512)
+    end,
+    each_key_row_saves_its_service = function()
+        local F, app, s = setup({ key = false })
+        for row, id in ipairs({ "anthropic", "opencode", "openrouter", "vercel" }) do
+            focus(F, app, s, row)
+            press(F, app, "enter")
+            F.type("k-" .. id)
+            press(F, app, "enter")
+        end
+        T.same(app.store:keys(), { anthropic = "k-anthropic", opencode = "k-opencode",
+            openrouter = "k-openrouter", vercel = "k-vercel" })
+        T.eq(F.files[D .. "/keys.txt"], "# LLM Chat API keys. One per line: name=value\n"
+            .. "anthropic=k-anthropic\nopencode=k-opencode\nopenrouter=k-openrouter\nvercel=k-vercel\n")
     end,
     key_esc_cancels_the_edit = function()
         local F, app, s = setup()
-        focus(F, app, s, 3)
+        focus(F, app, s, 1)
         press(F, app, "enter")
         F.type("zzz")
         press(F, app, "esc")
         T.eq(app.screenName, "settings")
-        T.eq(app.store:keys().claude, CLAUDE_KEY)
+        T.eq(app.store:keys().anthropic, CLAUDE_KEY)
         T.ok(not F.screenText():find("zzz", 1, true))
     end,
     key_edit_starts_with_the_current_key = function()
         local F, app, s = setup()
-        focus(F, app, s, 3)
+        focus(F, app, s, 1)
         press(F, app, "enter")
         T.ok(F.screenText():find(CLAUDE_KEY, 1, true))
         press(F, app, "enter")
-        T.eq(app.store:keys().claude, CLAUDE_KEY)
+        T.eq(app.store:keys().anthropic, CLAUDE_KEY)
     end,
     key_blank_clears_it = function()
         local F, app, s = setup()
-        focus(F, app, s, 3)
+        focus(F, app, s, 1)
         press(F, app, "enter")
         for _ = 1, #CLAUDE_KEY do F.key("backspace") end
         press(F, app, "enter")
-        T.eq(app.store:keys().claude, nil)
+        T.eq(app.store:keys().anthropic, nil)
     end,
     keys_never_logged = function()
         local F, app, s = setup()
@@ -231,11 +218,12 @@ return {
         T.eq(s.focus, 1)
     end,
     esc_saves_prefs = function()
-        local F, app = setup()
-        press(F, app, "right", "esc")
+        local F, app, s = setup()
+        focus(F, app, s, 5)
+        press(F, app, "enter", "down", "enter", "esc")
         T.eq(app.screenName, "chat")
         local fresh = Store.new(F.pc.fs, F.pc.json, D)
-        T.eq(fresh:prefs().provider, "openai")
+        T.eq(fresh:prefs().thinking, "medium")
     end,
     failed_font_load_leaves_a_usable_font = function()
         local F, app, s = setup()
