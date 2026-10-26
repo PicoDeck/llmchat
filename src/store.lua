@@ -2,15 +2,18 @@
 -- fs and json are injected (picocalc.fs / picocalc.json, or fakes in tests),
 -- and so is store.radioBusy: a function, true while an HTTP request is in
 -- flight (the app sets it; nil means never), which onCard reads.
+local Services = require("src.services")
+
 local Store = {}
 Store.__index = Store
 
 Store.CAP = 50
+Store.RECENT_MAX = 8
 
 local function defaults()
     return {
-        provider = "claude",
-        models = { claude = "claude-opus-5-5", openai = "gpt-6-luna" },
+        model = Services.DEFAULT_MODEL,
+        recent = {},
         thinking = "low",
         font = "sans",
         instructions = "Keep answers short: I'm reading on a 320 px screen.",
@@ -156,21 +159,49 @@ end
 
 -- ------------------------------------------------------------------- prefs
 
+-- Valid full ids, newest first, without repeats, at most RECENT_MAX.
+local function cleanRecent(list)
+    local out, seen = {}, {}
+    if type(list) ~= "table" then return out end
+    for _, id in ipairs(list) do
+        if #out >= Store.RECENT_MAX then break end
+        if Services.valid(id) and not seen[id] then
+            seen[id] = true
+            out[#out + 1] = id
+        end
+    end
+    return out
+end
+
+-- An old prefs.json (gateways spec 9.1): its Claude model becomes the
+-- current model, its claude_base the anthropic_base; the rest of the old
+-- provider settings go (a saved OpenAI choice falls back to the default).
+local function migrate(p, saved)
+    if saved.model == nil and type(saved.models) == "table" and type(saved.models.claude) == "string" then
+        p.model = "anthropic/" .. saved.models.claude
+    end
+    if saved.anthropic_base == nil and saved.claude_base ~= nil then p.anthropic_base = saved.claude_base end
+    p.provider, p.models, p.claude_base, p.openai_base = nil, nil, nil, nil
+end
+
 function Store:prefs()
     if self._prefs then return self._prefs end
     local p = defaults()
     local saved = self:readJSON("prefs.json")
     if type(saved) == "table" then
         for k, v in pairs(saved) do
-            if k == "models" or k == "drafts" then
+            if k == "drafts" then
                 if type(v) == "table" then
-                    for k2, v2 in pairs(v) do p[k][k2] = v2 end
+                    for k2, v2 in pairs(v) do p.drafts[k2] = v2 end
                 end
             else
                 p[k] = v
             end
         end
+        migrate(p, saved)
     end
+    if not Services.valid(p.model) then p.model = Services.DEFAULT_MODEL end
+    p.recent = cleanRecent(p.recent)
     if type(p.nextId) ~= "number" then p.nextId = 0 end
     self._prefs = p
     return p
@@ -181,13 +212,27 @@ function Store:savePrefs()
     local out = {}
     for k, v in pairs(p) do out[k] = v end
     if next(p.drafts) == nil then out.drafts = nil end
+    if #p.recent == 0 then out.recent = nil end
     return self:writeJSON("prefs.json", out)
 end
 
-local BASE = { claude = "claude_base", openai = "openai_base" }
+-- Moves `full` to the front of the recent models (gateways spec 9.1). The
+-- caller saves the prefs.
+function Store:pushRecent(full)
+    if not Services.valid(full) then return end
+    local p = self:prefs()
+    local out = { full }
+    for _, id in ipairs(p.recent) do
+        if id ~= full and #out < Store.RECENT_MAX then out[#out + 1] = id end
+    end
+    p.recent = out
+end
 
-function Store:base(providerId)
-    local v = self:prefs()[BASE[providerId] or ""]
+-- The hidden test override for a service's hosts (gateways spec 9.3):
+-- prefs["<service>_base"], loopback only.
+function Store:base(serviceId)
+    if not Services.BY_ID[serviceId] then return nil end
+    local v = self:prefs()[serviceId .. "_base"]
     if type(v) ~= "string" then return nil end
     if v:match("^http://127%.0%.0%.1:%d+$") or v:match("^http://localhost:%d+$") then return v end
     return nil
@@ -197,9 +242,12 @@ end
 
 local function trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
 
+-- Keys by service id (gateways spec 9.2). claude= is read as anthropic=
+-- (keys files already on cards), but an anthropic= line wins; openai= and
+-- unknown names are ignored.
 function Store:keys()
     if self._keys then return self._keys end
-    local keys = {}
+    local keys, claude = {}, nil
     local text = self:readText("keys.txt")
     if type(text) == "string" then
         for line in (text .. "\n"):gmatch("([^\r\n]*)[\r\n]") do
@@ -208,34 +256,41 @@ function Store:keys()
                 local k, v = line:match("^([^=]+)=(.*)$")
                 if k then
                     k, v = trim(k), trim(v)
-                    if (k == "claude" or k == "openai") and v ~= "" then keys[k] = v end
+                    if v ~= "" then
+                        if k == "claude" then claude = v
+                        elseif Services.BY_ID[k] then keys[k] = v end
+                    end
                 end
             end
         end
     end
+    if not keys.anthropic then keys.anthropic = claude end
     self._keys = keys
     return keys
 end
 
-function Store:setKey(providerId, key)
+-- Writes keys.txt with the four names, in the services' order (an old
+-- claude= or openai= line goes then). An empty key removes it.
+function Store:setKey(serviceId, key)
+    if not Services.BY_ID[serviceId] then return nil, "unknown service " .. tostring(serviceId) end
     local keys = self:keys()
-    local old = keys[providerId]
+    local old = keys[serviceId]
     if key == "" then key = nil end
-    keys[providerId] = key
-    local text = "# LLM Chat API keys. One per line: name=value\n"
-        .. "claude=" .. (keys.claude or "") .. "\n"
-        .. "openai=" .. (keys.openai or "") .. "\n"
-    local ok, err = self:writeText("keys.txt", text)
-    if not ok then keys[providerId] = old end
+    keys[serviceId] = key
+    local lines = { "# LLM Chat API keys. One per line: name=value" }
+    for _, id in ipairs(Services.ORDER) do lines[#lines + 1] = id .. "=" .. (keys[id] or "") end
+    local ok, err = self:writeText("keys.txt", table.concat(lines, "\n") .. "\n")
+    if not ok then keys[serviceId] = old end
     return ok, err
 end
 
--- Spec 8.4. config is picocalc.config.
+-- Spec 8.4. config is picocalc.config. Only a provider-2 (Claude) key is
+-- imported; a provider-1 key is an OpenAI key (gateways spec 9.5).
 function Store:importOld(config)
     local key = config.get("llmchat_api_key")
     if type(key) ~= "string" or key == "" then return false end
     local prov = config.get("llmchat_provider")
-    local name = ({ ["1"] = "openai", ["2"] = "claude" })[tostring(prov)]
+    local name = ({ ["2"] = "anthropic" })[tostring(prov)]
     local imported = false
     if name and not self:keys()[name] then
         if not self:setKey(name, key) then return false end -- abort, keep old keys
@@ -245,6 +300,36 @@ function Store:importOld(config)
     config.set("llmchat_provider", nil)
     self:onCard(config.save)
     return imported
+end
+
+-- ------------------------------------------------------------- model lists
+
+-- models/<service>.txt (gateways spec 8.4): "# fetched <epoch>", then one id
+-- per line without the service part. { fetched = epoch|nil, ids }, or nil
+-- when there is no file. Lines that aren't a valid id are dropped.
+function Store:modelList(serviceId)
+    if not Services.BY_ID[serviceId] then return nil end
+    local text = self:readText("models/" .. serviceId .. ".txt")
+    if type(text) ~= "string" then return nil end
+    local out = { ids = {} }
+    for line in (text .. "\n"):gmatch("([^\r\n]*)[\r\n]") do
+        line = trim(line)
+        local epoch = line:match("^# fetched (%d+)$")
+        if epoch then
+            out.fetched = math.tointeger(tonumber(epoch))
+        elseif line ~= "" and Services.valid(serviceId .. "/" .. line) then
+            out.ids[#out.ids + 1] = line
+        end
+    end
+    return out
+end
+
+-- Safe save: the old list stays until the new one is whole. true | nil, err.
+function Store:saveModelList(serviceId, ids, epoch)
+    if not Services.BY_ID[serviceId] then return nil, "unknown service " .. tostring(serviceId) end
+    local lines = { "# fetched " .. tostring(math.tointeger(epoch) or 0) }
+    for _, id in ipairs(ids) do lines[#lines + 1] = id end
+    return self:writeText("models/" .. serviceId .. ".txt", table.concat(lines, "\n") .. "\n")
 end
 
 -- ------------------------------------------------------------------- chats

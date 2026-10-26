@@ -42,7 +42,7 @@ end
 -- programs (saved over with .prev, adopted, orphaned, deleted with data).
 local function everyWrite(s, F)
     s:savePrefs()
-    s:setKey("claude", "sk-ant-test")
+    s:setKey("anthropic", "sk-ant-test")
     for i = 1, Store.CAP + 1 do assert(s:saveChat(chat("c" .. i, i))) end
     assert(s:deleteChat("c51"))
     F.files[D .. "/chats/bad.json"] = "{not json"
@@ -87,7 +87,7 @@ return {
         local s, fs, files = mk()
         files[D .. "/prefs.json"] = "\0\1garbage"
         files[D .. "/chats/x1.json"] = '{"items": 5}'
-        T.eq(s:prefs().provider, "claude")
+        T.eq(s:prefs().model, "anthropic/claude-opus-5-5")
         T.eq(s:loadChat("x1"), nil)
         T.eq(s:loadChat("../evil"), nil)
     end,
@@ -126,52 +126,160 @@ return {
         fs.failRead = nil
         T.eq(s:readJSON("a.json").n, 1)
     end,
+    -- Gateways spec 9.1: one current model and the recent ones; `recent`
+    -- is left out of prefs.json while empty (never encode an empty table).
     prefs_defaults = function()
-        local s = mk()
+        local s, fs, files = mk()
         local p = s:prefs()
-        T.eq(p.provider, "claude")
-        T.eq(p.models.claude, "claude-opus-5-5")
-        T.eq(p.models.openai, "gpt-6-luna")
+        T.eq(p.model, "anthropic/claude-opus-5-5")
+        T.same(p.recent, {})
+        T.eq(p.provider, nil); T.eq(p.models, nil)
         T.eq(p.thinking, "low")
         T.eq(p.font, "sans")
         T.eq(p.instructions, "Keep answers short: I'm reading on a 320 px screen.")
+        T.ok(s:savePrefs())
+        local saved = json.decode(files[D .. "/prefs.json"])
+        T.eq(saved.model, "anthropic/claude-opus-5-5")
+        T.eq(saved.recent, nil)
+        T.ok(not files[D .. "/prefs.json"]:find("recent", 1, true))
     end,
     prefs_save_and_reload = function()
         local s, fs = mk()
         local p = s:prefs()
-        p.font = "mono"; p.models.openai = "gpt-x"; p.drafts = { c1 = "hello" }
+        p.font = "mono"; p.model = "vercel/google/gemini-3.8-flash"; p.drafts = { c1 = "hello" }
+        s:pushRecent("vercel/google/gemini-3.8-flash")
         T.ok(s:savePrefs())
         local s2 = Store.new(fs, json, D)
         T.eq(s2:prefs().font, "mono")
-        T.eq(s2:prefs().models.openai, "gpt-x")
-        T.eq(s2:prefs().models.claude, "claude-opus-5-5")
+        T.eq(s2:prefs().model, "vercel/google/gemini-3.8-flash")
+        T.same(s2:prefs().recent, { "vercel/google/gemini-3.8-flash" })
         T.eq(s2:prefs().drafts.c1, "hello")
         s2:prefs().drafts = {}
         T.ok(s2:savePrefs())
     end,
+    prefs_migrates_old = function()
+        local s, fs, files = mk()
+        files[D .. "/prefs.json"] = json.encode({ provider = "claude",
+            models = { claude = "claude-sonnet-5-5", openai = "gpt-6-luna" },
+            claude_base = "http://127.0.0.1:9", openai_base = "http://127.0.0.1:9", font = "mono" })
+        local p = s:prefs()
+        T.eq(p.model, "anthropic/claude-sonnet-5-5")
+        T.eq(p.anthropic_base, "http://127.0.0.1:9")
+        T.eq(s:base("anthropic"), "http://127.0.0.1:9")
+        T.eq(p.font, "mono")
+        T.ok(s:savePrefs())
+        local saved = json.decode(files[D .. "/prefs.json"])
+        for _, gone in ipairs({ "provider", "models", "claude_base", "openai_base" }) do
+            T.eq(saved[gone], nil, gone)
+        end
+        T.eq(saved.model, "anthropic/claude-sonnet-5-5")
+        T.eq(saved.anthropic_base, "http://127.0.0.1:9")
+        -- a saved OpenAI choice falls back to the default (there's no OpenAI any more)
+        local s2, _, files2 = mk()
+        files2[D .. "/prefs.json"] = json.encode({ provider = "openai", models = { openai = "gpt-6-luna" } })
+        T.eq(s2:prefs().model, "anthropic/claude-opus-5-5")
+        -- a model already set is kept over models.claude
+        local s3, _, files3 = mk()
+        files3[D .. "/prefs.json"] = json.encode({ model = "vercel/x", models = { claude = "claude-sonnet-5-5" } })
+        T.eq(s3:prefs().model, "vercel/x")
+    end,
+    prefs_tampered = function()
+        for _, bad in ipairs({ 5, "foo/bar", "anthropic", "vercel/a b", "" }) do
+            local s, _, files = mk()
+            files[D .. "/prefs.json"] = json.encode({ model = bad, recent = { "x", 3, "vercel/a", "vercel/a" } })
+            T.eq(s:prefs().model, "anthropic/claude-opus-5-5", tostring(bad))
+            T.same(s:prefs().recent, { "vercel/a" })
+        end
+        local s, _, files = mk()
+        files[D .. "/prefs.json"] = '{"recent":"vercel/a"}'
+        T.same(s:prefs().recent, {})
+        local s2, _, files2 = mk()
+        local many = {}
+        for i = 1, 12 do many[i] = "vercel/m" .. i end
+        files2[D .. "/prefs.json"] = json.encode({ recent = many })
+        T.eq(#s2:prefs().recent, 8)
+        T.eq(s2:prefs().recent[8], "vercel/m8")
+    end,
+    push_recent = function()
+        local s = mk()
+        T.eq(Store.RECENT_MAX, 8)
+        s:pushRecent("vercel/a"); s:pushRecent("opencode/b"); s:pushRecent("vercel/a")
+        T.same(s:prefs().recent, { "vercel/a", "opencode/b" })
+        for i = 1, 10 do s:pushRecent("openrouter/m" .. i) end
+        local r = s:prefs().recent
+        T.eq(#r, 8)
+        T.eq(r[1], "openrouter/m10"); T.eq(r[8], "openrouter/m3")
+        s:pushRecent("not an id")
+        T.eq(s:prefs().recent[1], "openrouter/m10")
+    end,
     base_override_loopback_only = function()
         local s = mk()
         local p = s:prefs()
-        p.claude_base = "http://127.0.0.1:9000"
-        p.openai_base = "http://localhost:9000"
-        T.eq(s:base("claude"), "http://127.0.0.1:9000")
-        T.eq(s:base("openai"), "http://localhost:9000")
+        p.anthropic_base = "http://127.0.0.1:9000"
+        p.vercel_base = "http://localhost:9000"
+        T.eq(s:base("anthropic"), "http://127.0.0.1:9000")
+        T.eq(s:base("vercel"), "http://localhost:9000")
+        T.eq(s:base("opencode"), nil)
         for _, bad in ipairs({ "http://evil.example:9000", "https://127.0.0.1:9000",
                                "http://127.0.0.1", "http://127.0.0.1:9000/x", "http://127.0.0.1:9000@evil.com" }) do
-            p.claude_base = bad
-            T.eq(s:base("claude"), nil, bad)
+            p.anthropic_base = bad
+            T.eq(s:base("anthropic"), nil, bad)
         end
-        p.claude_base = 5
-        T.eq(s:base("claude"), nil)
+        p.anthropic_base = 5
+        T.eq(s:base("anthropic"), nil)
+    end,
+    base_per_service = function()
+        local s = mk()
+        local p = s:prefs()
+        p.vercel_base = "http://127.0.0.1:8123"
+        p.openrouter_base = "https://evil.example"
+        p.zzz_base = "http://127.0.0.1:1"
+        T.eq(s:base("vercel"), "http://127.0.0.1:8123")
+        T.eq(s:base("openrouter"), nil)
+        T.eq(s:base("zzz"), nil)
     end,
     keys_parse = function()
         local s, fs, files = mk()
-        files[D .. "/keys.txt"] = "# c\nclaude = sk-ant-x \nopenai=sk-y\n"
-        T.same(s:keys(), { claude = "sk-ant-x", openai = "sk-y" })
-        T.ok(s:setKey("openai", "sk-new"))
+        files[D .. "/keys.txt"] = "# c\nanthropic = sk-ant-x \nvercel=vk-y\nopencode=sk-o\nopenrouter=sk-or-v1-r\nzzz=1\n"
+        T.same(s:keys(), { anthropic = "sk-ant-x", vercel = "vk-y", opencode = "sk-o", openrouter = "sk-or-v1-r" })
+        T.ok(s:setKey("vercel", "vk-new"))
         local s2 = Store.new(fs, json, D)
-        T.same(s2:keys(), { claude = "sk-ant-x", openai = "sk-new" })
+        T.same(s2:keys(), { anthropic = "sk-ant-x", vercel = "vk-new", opencode = "sk-o", openrouter = "sk-or-v1-r" })
         T.ok(files[D .. "/keys.txt"]:sub(1, 1) == "#")
+    end,
+    -- Gateways spec 9.2: keys files already on cards name the Anthropic key
+    -- claude=; an anthropic= line wins; openai= is ignored, and dropped when
+    -- Settings saves.
+    keys_alias = function()
+        local s, fs, files = mk()
+        files[D .. "/keys.txt"] = "claude=A\n"
+        T.same(s:keys(), { anthropic = "A" })
+        local s2, _, files2 = mk()
+        files2[D .. "/keys.txt"] = "anthropic=B\nclaude=A\nopenai=C\n"
+        T.same(s2:keys(), { anthropic = "B" })
+        local s3, _, files3 = mk()
+        files3[D .. "/keys.txt"] = "claude=A\nopenai=C\n"
+        T.ok(s3:setKey("vercel", "V"))
+        T.eq(files3[D .. "/keys.txt"], "# LLM Chat API keys. One per line: name=value\n"
+            .. "anthropic=A\nopencode=\nopenrouter=\nvercel=V\n")
+        local ok, err = s3:setKey("openai", "X")
+        T.eq(ok, nil); T.ok(err)
+        T.eq(s3:keys().openai, nil)
+    end,
+    model_list_roundtrip = function()
+        local s, fs, files = mk()
+        T.eq(s:modelList("vercel"), nil)
+        T.ok(s:saveModelList("vercel", { "a", "b/c-1.2" }, 1792000000))
+        T.eq(files[D .. "/models/vercel.txt"], "# fetched 1792000000\na\nb/c-1.2\n")
+        T.same(Store.new(fs, json, D):modelList("vercel"), { fetched = 1792000000, ids = { "a", "b/c-1.2" } })
+        files[D .. "/models/opencode.txt"] = "x\n\n y \nnot valid!\n"
+        T.same(s:modelList("opencode"), { ids = { "x", "y" } })
+        T.eq(s:modelList("opencode").fetched, nil)
+        fs.failWrite = true
+        local ok, err = s:saveModelList("vercel", { "z" }, 1792000001)
+        T.eq(ok, nil); T.ok(err)
+        fs.failWrite = nil
+        T.same(s:modelList("vercel").ids, { "a", "b/c-1.2" })
     end,
     keys_missing_file = function()
         local s = mk()
@@ -187,7 +295,7 @@ return {
             save = function() saved = true; return true end,
         }
         T.eq(s:importOld(config), true)
-        T.eq(s:keys().claude, "sk-ant-old")
+        T.eq(s:keys().anthropic, "sk-ant-old")
         T.eq(cfg.llmchat_api_key, nil)
         T.eq(cfg.llmchat_provider, nil)
         T.ok(saved)
@@ -198,8 +306,11 @@ return {
         local cfg = { llmchat_provider = "1", llmchat_api_key = "sk-o" }
         local config = { get = function(k) return cfg[k] end, set = function(k, v) cfg[k] = v end,
                          save = function() return true end }
-        T.eq(s:importOld(config), true)
-        T.eq(s:keys().openai, "sk-o")
+        -- gateways spec 9.5: a provider-1 key is an OpenAI key, not imported
+        T.eq(s:importOld(config), false)
+        T.same(s:keys(), {})
+        T.eq(cfg.llmchat_api_key, nil)
+        T.eq(cfg.llmchat_provider, nil)
         local s2 = mk()
         cfg = { llmchat_provider = "3", llmchat_api_key = "x" }
         T.eq(s2:importOld(config), false)
@@ -211,7 +322,7 @@ return {
     keys_recovered_from_tmp = function()
         local s, fs, files = mk()
         files[D .. "/keys.txt.tmp"] = "claude=a\nopenai=b\n"
-        T.same(s:keys(), { claude = "a", openai = "b" })
+        T.same(s:keys(), { anthropic = "a" })
         T.ok(fs.exists(D .. "/keys.txt"))
         T.ok(not fs.exists(D .. "/keys.txt.tmp"))
     end,
