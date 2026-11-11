@@ -314,6 +314,8 @@ function M.new()
     F.binds = { [1] = { "Up" }, [2] = { "Down" }, [4] = { "Left" }, [8] = { "Right" }, [16] = { "F4" },
                 [32] = { "F5" }, [64] = { "Del" }, [128] = { "Bksp" }, [256] = { "F2" }, [512] = { "F3" },
                 [1024] = { "F1" }, [2048] = { "Tab" } }
+    -- F.keysUpByRead = true models the device: a typed key's events and its pad
+    -- edge arrive in one frame with isKeyDown already false.
     F.padNext, F.repNext, F.held = 0, 0, {}
     F.padFrame = { pressed = 0, repeated = 0, nav = 0, held = 0, down = {} }
     local function buttonOf(name)
@@ -330,7 +332,7 @@ function M.new()
                 if b then fr.pressed = fr.pressed | b
                 elseif ev.padKey == "Enter" then fr.nav = fr.nav | PAD.A
                 elseif ev.padKey == "Esc" then fr.nav = fr.nav | PAD.B end
-                if ev.key then fr.down[ev.key] = true end
+                if ev.key and not F.keysUpByRead then fr.down[ev.key] = true end
                 if ev.type == "down" then fr.held = fr.held | (ev.button or 0) | (ev.mods or 0) end
             end
         end

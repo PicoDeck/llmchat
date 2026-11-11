@@ -40,6 +40,37 @@ return {
         T.eq(pad:pressed(Pad.TEXT), Pad.A, "F4 is still A")
     end,
 
+    -- The device's timing: the key's events and the pad edge share a frame
+    -- and isKeyDown is already false, so only pad:saw knows the key was hit.
+    a_key_already_up_when_read_is_still_dropped = function()
+        local F, pad, frame = setup()
+        F.keysUpByRead = true
+        F.binds[Pad.A] = { "Z", "F4" }
+        F.type("z")
+        frame()
+        T.ok(not F.pc.input.isKeyDown(0x7A), "z is up when read")
+        T.eq(pad:pressed(Pad.TEXT), 0, "z still types")
+        frame()
+        T.eq(pad:pressed(), 0, "a frame later it is forgotten")
+        F.pad("a")
+        frame()
+        T.eq(pad:pressed(Pad.TEXT), Pad.A, "the controller's A counts")
+    end,
+
+    -- A key held across frames has no event this frame: isKeyDown tells.
+    a_held_key_is_dropped_through_isKeyDown = function()
+        local F, pad, frame = setup()
+        F.binds[Pad.A] = { "Z", "F4" }
+        F.held[0x7A] = true
+        F.pad("a")
+        frame()
+        T.eq(pad:pressed(Pad.TEXT), 0, "held z types")
+        F.held[0x7A] = nil
+        F.pad("a")
+        frame()
+        T.eq(pad:pressed(Pad.TEXT), Pad.A, "released: the controller counts")
+    end,
+
     arrows_type_but_the_controller_counts = function()
         local F, pad, frame = setup()
         F.key("up")
