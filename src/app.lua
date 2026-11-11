@@ -5,9 +5,13 @@
 --   S.new(app)       once, when first visited
 --   s:enter(arg)     each time the screen becomes current
 --   s:leave()        optional; each time it stops being current
---   s:key(ev)        one pollEvent event of type "down" or "char"
+--   s:key(ev)        optional; one pollEvent event of type "down" or "char"
+--   s:pad(pad)       optional; once a frame when a pad button was pressed or
+--                    repeated, after the frame's key events, unless they
+--                    changed the screen or called app:settle()
 --   s:tick(now)      every frame; returns true when it needs a redraw
 --   s:draw()         clear and draw the whole screen (flush is the app's)
+local Pad = require("src.pad")
 local Store = require("src.store")
 local Chat = require("src.chat")
 local Programs = require("src.programs")
@@ -44,6 +48,8 @@ function App.new(pc, appId, appDir)
     local self = setmetatable({ pc = pc, appId = appId, dir = appDir, screens = {}, dirty = true, running = true }, App)
     Sandbox.lockStrings() -- spec 9.3: getmetatable("") can't reach the real string table
     self.W = require("src.widgets")
+    self.pad = Pad.new(pc)
+    self.settles = 0
     self.theme = Theme.new(pc.display)
     self.store = Store.new(pc.fs, pc.json, "/data/" .. appId)
     -- The store writes in slow mode while a request is on the air (S1).
@@ -90,6 +96,11 @@ function App:go(name, arg)
 end
 
 function App:quit() self.running = false end
+
+-- A screen calls this when a key event moved its focus (ended an edit): the
+-- frame's pad presses were made for the focus before, so they are dropped
+-- (the Enter that saves a key is also getNavPressed's A).
+function App:settle() self.settles = self.settles + 1 end
 
 -- ------------------------------------------------------------ programs
 
@@ -222,15 +233,23 @@ end
 
 -- The frame itself (App:frame runs it guarded).
 function App:step()
-    local pc = self.pc
+    local pc, pad = self.pc, self.pad
     pc.input.update()
+    pad:frame()
+    local screen, settles = self.screen, self.settles
     while self.running do
         local ev = pc.input.pollEvent()
         if not ev then break end
         if ev.type == "down" or ev.type == "char" then
-            self.screen:key(ev)
+            pad:saw(ev)
+            if self.screen.key then self.screen:key(ev) end
             self.dirty = true
         end
+    end
+    if not self.running then return end
+    if self.screen == screen and self.settles == settles and screen.pad and pad:any() then
+        screen:pad(pad)
+        self.dirty = true
     end
     if not self.running then return end
     local now = pc.sys.getTimeMs()

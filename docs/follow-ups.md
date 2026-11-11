@@ -51,3 +51,13 @@ Open items left when LLM Chat 2.0 was merged (2026-10-26). The build was reviewe
   - `sound.sample(seconds)` blank samples can't be made in the sandbox.
   - Settings doesn't resync the thinking, font and instructions widgets when it reopens. Ages in the lists don't refresh while a list is open.
   - The prompt's API notes list sprite and tilemap functions with `(...)` arguments.
+
+## Gamepad (2026-11-10)
+
+- **The program sandbox's API list is behind PicoDeck develop.** With `PICODECK_ROOT` on develop (a86e525a) four host tests fail: `audit_covers_docs` (the gfx3d texture calls, `gamepad.getButtonsRepeated`, `getNavPressed`, `getAxis`, `sys.addMenuOption` are not in `src/sandbox_api.lua`), `callback_params_declared` (`addMenuOption`'s callback), and the two download-library tests (the library now calls `fs.isDir`). Programs can't use those calls yet. Each needs its own sandbox review.
+- **Shift+Up/Down and Shift+Enter in the chat on the device.** The keyboard reports PgUp/PgDn (`0xD6`/`0xD7`) and Insert (`0xD1`) with no `BTN_*` bit, and the chat checks `BTN_UP`/`BTN_DOWN`/`BTN_ENTER` with Shift, so its page scroll and new line may never work on the device (the simulator reports them as the plain key with Shift). Device checklist row 27. The picker pages through the gamepad, which reads them as Up/Down.
+- **Two saved notes name keys literally**: "This chat is getting long; F2 starts a new one." (`src/chat.lua`, matched by its text when a chat is reopened) and the no-key note "... in Settings (F5), or pick another model (F4).". They are right with the default bindings; naming the bound key would need the match by prefix.
+- A binding changed in the system menu shows in the Recent chats, Settings and error-screen footers at their next redraw (the next key or button): they draw only on input.
+- A controller has no way to stop a reply (Esc only): the chat's B is Settings.
+- The picker's "no key" and "failed" rows are built at `S:rebuild`, so after a rebind from the system menu they show the old key name until the next rebuild.
+- Two taps of one key inside one long frame now move once on the lists, picker and Settings: the edge-based `getNavPressed` gives one edge per poll. Only visible in long frames (device checklist row 17 saw ~150 ms frames during downloads).

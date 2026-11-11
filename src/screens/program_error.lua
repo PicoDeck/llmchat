@@ -3,9 +3,10 @@
 -- it printed, then "Ask the model to fix" (focused) and "Back to chat".
 -- arg = {name, result = Sandbox.execute's result, chatId = the chat the run
 -- belongs to, or nil when the program's chat was deleted}.
--- Keys: Left/Right move between the buttons, Enter chooses, F3 runs the
--- program again, Esc goes back to the chat. Everything is drawn in 6x8.
-local Keys = require("src.keys")
+-- Pad: Left/Right move between the buttons, A chooses, R runs the program
+-- again, B goes back to the chat (the keys bound to them work the same).
+-- Everything is drawn in 6x8.
+local Pad = require("src.pad")
 local Wrap = require("src.wrap")
 local Services = require("src.services")
 
@@ -21,7 +22,6 @@ local TOP_PAD, BOTTOM_PAD = 30, 20
 local MAX_BOTTOM = 264 -- lowest panel bottom that leaves room for the buttons
 local MAX_ERR_ROWS = 6
 local BUTTONS = { { x = 20, w = 170 }, { x = 200, w = 100 } }
-local FOOTER = "Enter choose  F3 run again"
 
 function S.new(app)
     return setmetatable({ app = app, pc = app.pc, theme = app.theme, focus = 1 }, S)
@@ -108,7 +108,7 @@ function S:layout(panelY)
     end
 end
 
--- ----------------------------------------------------------------- keys
+-- ------------------------------------------------------------------ pad
 
 function S:fix()
     local app, a = self.app, self.arg
@@ -131,20 +131,18 @@ function S:fix()
     chat:askFix(self.name, self.result, code)
 end
 
-function S:key(ev)
-    local app, input = self.app, self.pc.input
-    local function is(name) return Keys.is(ev, input, name) end
-    if is("LEFT") then
-        self.focus = 1
-    elseif is("RIGHT") then
-        self.focus = 2
-    elseif is("ENTER") then
+function S:pad(p)
+    local app = self.app
+    local nav = p:nav()
+    if nav & Pad.LEFT ~= 0 then self.focus = 1 end
+    if nav & Pad.RIGHT ~= 0 then self.focus = 2 end
+    if nav & Pad.B ~= 0 then
+        app:go("chat")
+    elseif nav & Pad.A ~= 0 then
         if self.focus == 1 then self:fix() else app:go("chat") end
-    elseif is("F3") then
+    elseif nav & Pad.R ~= 0 then
         local a = self.arg
         app:runProgram(self.name, a.chatId and { chatId = a.chatId } or { orphan = true })
-    elseif is("ESC") then
-        app:go("chat")
     end
 end
 
@@ -169,7 +167,8 @@ function S:draw()
         pc.ui.drawButton(b.x, by, b.w, labels[i], self.focus == i)
     end
     d.setFont(d.FONT_6X8)
-    pc.ui.drawFooter(FOOTER)
+    local p = self.app.pad
+    pc.ui.drawFooter(Pad.hint("  ", { { p:label(Pad.A, nil, true), "choose" }, { p:label(Pad.R), "run again" } }))
 end
 
 return S

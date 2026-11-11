@@ -8,7 +8,7 @@ Chat with Claude, and with the models on OpenCode, OpenRouter and Vercel AI Gate
 - A model's Lua program is saved on the card and runs from F3 or the Programs tab. If it crashes, one key asks the model to fix it.
 
 ## Set up
-1. Install LLM Chat from the PicoDeck App Store. The device needs WiFi.
+1. Install LLM Chat from the PicoDeck App Store. The device needs WiFi and PicoDeck 0.7.0 or later.
 2. Give it an API key for one or more of the services: Anthropic (Claude), [OpenCode](https://opencode.ai), [OpenRouter](https://openrouter.ai) and [Vercel AI Gateway](https://vercel.com/ai-gateway). Either:
    - open Settings (F5), move to the service's row under **API keys** and press Enter to type or paste the key; or
    - put the keys in a file `keys.txt` in the app's data folder, `/data/net.picodeck.llmchat/`, from a computer over USB or with the Text Editor app. One key per line, `#` starts a comment:
@@ -26,59 +26,62 @@ Chat with Claude, and with the models on OpenCode, OpenRouter and Vercel AI Gate
 Keys are shown masked in Settings, and each one is only ever sent to its own service's server.
 
 ## Keys
+Every command also works from a game controller, and follows **Settings → Controls** in the system menu: F1-F5 and Tab act as the gamepad buttons they are bound to (by default Start, L, R, A and B; Tab is Select), and so do the arrows, Enter, Esc, Del and Backspace everywhere but where you type. The Pad column below names the button. Where you type (the compose box, the picker's filter, a key or the instructions in Settings) the keyboard types: a key there never also acts as the button it is bound to, and writing a message needs a keyboard. With only a controller you can still read and open chats, pick a model, change Settings and run programs; Home opens the system menu, where **Exit App** quits.
+
 **Chat**
 
-| Key | Action |
-|---|---|
-| typing, Left / Right, Backspace, Del | edit the compose box |
-| Enter | send. When the last line is an error and the box is empty, Enter retries |
-| Shift+Enter | new line in the compose box |
-| Up / Down | scroll the conversation a row (hold to repeat) |
-| Shift+Up / Shift+Down | scroll a page |
-| Esc | while a reply arrives: stop it. Otherwise quit (an unsent message is kept as a draft) |
-| F1 | Recent chats and programs |
-| F2 | new chat |
-| F3 | run the newest program in this chat (when one exists and no reply is arriving) |
-| F4 | pick a model (the next message goes to it, with the conversation so far; a dim "now `<model>`" line marks the switch) |
-| F5 | Settings |
+| Key | Pad | Action |
+|---|---|---|
+| typing, Left / Right, Backspace, Del | | edit the compose box |
+| Enter | | send. When the last line is an error and the box is empty, Enter retries |
+| Shift+Enter | | new line in the compose box |
+| Up / Down | Up / Down | scroll the conversation a row (hold to repeat) |
+| Shift+Up / Shift+Down | | scroll a page |
+| Esc | | while a reply arrives: stop it. Otherwise quit (an unsent message is kept as a draft) |
+| F1 | Start | Recent chats and programs |
+| F2 | L | new chat |
+| F3 | R | run the newest program in this chat (when one exists and no reply is arriving) |
+| F4 | A | pick a model (the next message goes to it, with the conversation so far; a dim "now `<model>`" line marks the switch) |
+| F5 | B | Settings |
 
 **Model picker** (F4)
 
-| Key | Action |
-|---|---|
-| typing, Left / Right, Backspace, Del | filter: every word you type must appear in the model's name (`ds flash`, `vercel gem`) |
-| Up / Down | move between models (hold to repeat); Shift for a page |
-| Enter | pick the model, or "Use `<id>`" for a whole id you typed, and go back to the chat |
-| Esc | clear the filter; when it's empty, go back without changing anything |
-| F2 | download the services' model lists again |
+| Key | Pad | Action |
+|---|---|---|
+| typing, Left / Right, Backspace, Del | | filter: every word you type must appear in the model's name (`ds flash`, `vercel gem`) |
+| Up / Down | Up / Down | move between models (hold to repeat); Shift for a page |
+| Enter, F4 | A | pick the model, or "Use `<id>`" for a whole id you typed, and go back to the chat |
+| Esc, F5 | B | clear the filter; when it's empty, go back without changing anything |
+| F2 | L | download the services' model lists again |
+| F1 | Start | Settings |
 
 **Recent chats and programs** (Left / Right switch between the Chats and Programs tabs)
 
-| Key | Chats tab | Programs tab |
-|---|---|---|
-| Up / Down | move in the list | move in the list |
-| Enter | open the chat | run the program |
-| F2 | new chat | new chat (Chats tab only) |
-| F4 | | open the chat that made the program |
-| Del | delete the chat (asks first) | delete the program (asks first) |
-| Esc | back to the chat | back to the chat |
+| Key | Pad | Chats tab | Programs tab |
+|---|---|---|---|
+| Up / Down | Up / Down | move in the list | move in the list |
+| Enter, F4 | A | open the chat | run the program |
+| F2 | L | new chat | |
+| Backspace | Y | | open the chat that made the program |
+| Del | X | delete the chat (asks first) | delete the program (asks first) |
+| Esc, F5 | B | back to the chat | back to the chat |
 
 **Program stopped** (after a crash)
 
-| Key | Action |
-|---|---|
-| Left / Right | move between "Ask the model to fix" and "Back to chat" |
-| Enter | choose the button |
-| F3 | run the program again |
-| Esc | back to the chat |
+| Key | Pad | Action |
+|---|---|---|
+| Left / Right | Left / Right | move between "Ask the model to fix" and "Back to chat" |
+| Enter, F4 | A | choose the button |
+| F3 | R | run the program again |
+| Esc, F5 | B | back to the chat |
 
 **Settings**
 
-| Key | Action |
-|---|---|
-| Up / Down | move between rows |
-| Enter | change the row, or edit a key or the instructions (an empty key removes it) |
-| Esc | while editing: cancel (instructions: done); otherwise save and go back |
+| Key | Pad | Action |
+|---|---|---|
+| Up / Down | Up / Down | move between rows |
+| Enter, F4 | A | change the row, or edit a key or the instructions (an empty key removes it) |
+| Esc, F5 | B | while editing: cancel (instructions: done); otherwise save and go back |
 
 ## Programs
 Ask for one in plain words: "write a dice roller", "a program that shows a clock". The model answers with a Lua program in a code block, headed by a comment that names the file, such as `-- dice.lua`. The system prompt teaches it the PicoDeck API.

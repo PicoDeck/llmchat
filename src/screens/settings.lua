@@ -1,8 +1,10 @@
 -- Settings (gateways spec 5.4, mockup 14): an API key per service, then the
--- replies' settings, each group under a dim label with a rule. Up/Down move
--- between the seven rows (the labels are skipped), Enter edits or changes the
--- focused row, Esc saves and goes back (Esc while editing a key cancels that
--- edit; while editing the instructions it ends it).
+-- replies' settings, each group under a dim label with a rule. The rows come
+-- from the pad: Up/Down move between the seven rows (the labels are skipped),
+-- A edits or changes the focused row, B saves and goes back. While a key or
+-- the instructions are edited the keyboard types, Enter saves a key, and Esc
+-- or B ends the edit (a key's is cancelled, the instructions are kept).
+local Pad = require("src.pad")
 local Keys = require("src.keys")
 local Fonts = require("src.fonts")
 local Services = require("src.services")
@@ -117,6 +119,7 @@ function S:commitKey(sid, text)
     local store = self.app.store
     text = text:match("^%s*(.-)%s*$")
     self.field, self.fieldRow = nil, nil
+    self.app:settle() -- the Enter that saved it is also the pad's A
     if text == (store:keys()[sid] or "") then return end
     if not store:setKey(sid, text) then self.pc.ui.toast("Could not save the key") end
 end
@@ -142,39 +145,53 @@ function S:setFocus(n)
     for row, w in pairs(self.selects) do w:setFocused(row == n) end
 end
 
+function S:endEdit()
+    self.field, self.fieldRow = nil, nil
+    self.editInstr = false
+    self.instr:setFocused(false)
+end
+
+-- Only while a key or the instructions are edited; the rest is S:pad.
 function S:key(ev)
-    local app, input = self.app, self.pc.input
-    local function is(name) return Keys.is(ev, input, name) end
+    if not (self.field or self.editInstr) then return end
+    local input = self.pc.input
+    if Keys.is(ev, input, "ESC") then
+        self:endEdit()
+        self.app:settle()
+        return
+    end
     local btns, ch = Keys.toWidget(ev, input)
-    if self.field then
-        if is("ESC") then
-            self.field, self.fieldRow = nil, nil
-        else
-            self.field:handleInput(btns, ch)
-        end
+    local w = self.field or self.instr
+    w:handleInput(btns, ch)
+end
+
+function S:pad(p)
+    local app, input = self.app, self.pc.input
+    if self.field or self.editInstr then
+        if p:pressed(Pad.TEXT) & Pad.B ~= 0 then self:endEdit() end
         return
     end
-    if self.editInstr then
-        if is("ESC") then
-            self.editInstr = false
-            self.instr:setFocused(false)
-        else
-            self.instr:handleInput(btns, ch)
-        end
-        return
-    end
+    local nav = p:nav()
     local sel = self.selects[self.focus]
     if sel and sel:isExpanded() then
-        sel:handleInput(btns, ch)
+        if nav & Pad.UP ~= 0 then sel:handleInput(input.BTN_UP, nil) end
+        if nav & Pad.DOWN ~= 0 then sel:handleInput(input.BTN_DOWN, nil) end
+        if nav & Pad.A ~= 0 then sel:handleInput(input.BTN_ENTER, nil) end
+        if nav & Pad.B ~= 0 then sel:handleInput(input.BTN_ESC, nil) end
         return
     end
-    if is("ESC") then
+    if nav & Pad.B ~= 0 then
         app:go("chat")
-    elseif is("UP") then
+        return
+    end
+    if nav & Pad.UP ~= 0 then
         self:setFocus(self.focus == 1 and #ROWS or self.focus - 1)
-    elseif is("DOWN") then
+    end
+    if nav & Pad.DOWN ~= 0 then
         self:setFocus(self.focus == #ROWS and 1 or self.focus + 1)
-    elseif is("ENTER") then
+    end
+    if nav & Pad.A ~= 0 then
+        sel = self.selects[self.focus]
         if sel then
             sel:handleInput(input.BTN_ENTER, nil)
             -- open on the current choice
@@ -196,7 +213,9 @@ function S:tick() return self.field ~= nil or self.editInstr end
 function S:footerText()
     if self.field then return KEY_FOOTER end
     if self.editInstr then return "Esc done" end
-    return "Up/Down move   Enter change   Esc back"
+    local p = self.app.pad
+    return Pad.hint("   ", { { "Up/Down", "move" }, { p:label(Pad.A, nil, true), "change" },
+                             { p:label(Pad.B, nil, true), "back" } })
 end
 
 function S:drawKey(row)

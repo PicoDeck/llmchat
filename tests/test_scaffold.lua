@@ -16,10 +16,19 @@ return {
         T.eq(a.category, "network")
         T.same(a.requirements, { "http" })
         T.eq(a.homepage, "https://github.com/PicoDeck/llmchat")
-        -- Final review I2: "Stop program" raises out of a menu-item callback,
-        -- which is safe to leave by longjmp only from picodeck v0.5.0 (commit
-        -- 3eab61f; before it, leaving the callback leaked the menu's backdrop).
-        T.eq(a.min_firmware, "0.5.0")
+        -- picocalc.gamepad.getNavPressed, which the screens read, is new in
+        -- picodeck 0.7.0 (it also has I2's safe "Stop program", from 0.5.0).
+        T.eq(a.min_firmware, "0.7.0")
+    end,
+    -- Older firmware gets a message, not a dead keyboard.
+    main_refuses_firmware_without_getNavPressed = function()
+        for _, gp in ipairs({ false, { PAD_A = 16 } }) do
+            local F = require("tests.fakepc").new()
+            F.pc.gamepad = gp or nil
+            _G.picocalc = F.pc
+            dofile("main.lua")
+            T.same(F.splash, { "LLM Chat needs a newer PicoDeck", "Update the firmware to 0.7.0 or later" })
+        end
     end,
     json_roundtrip = function()
         local v = { a = 1, b = { 1, 2 }, c = J.null }

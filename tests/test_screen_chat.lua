@@ -254,6 +254,107 @@ return {
         T.eq(app2.screens.chat.ta:getText(), "keep me")
     end,
 
+    -- The F-keys act through the pad's Start, L, R, A and B, and so does a
+    -- controller, whose presses no key event shows.
+    controller_reaches_every_screen = function()
+        local F, app = setup()
+        F.pad("start"); frames(app)
+        T.eq(app.screenName, "lists")
+        F.pad("b"); frames(app)
+        T.eq(app.screenName, "chat")
+        F.pad("a"); frames(app)
+        T.eq(app.screenName, "picker")
+        F.pad("b"); frames(app)
+        T.eq(app.screenName, "chat")
+        F.pad("b"); frames(app)
+        T.eq(app.screenName, "settings")
+    end,
+
+    controller_scrolls = function()
+        local F, app, s = openTall()
+        local max = s.maxScroll
+        F.pad("up"); frames(app)
+        T.eq(s.scroll, max - 14)
+        F.padRepeat("up"); frames(app)
+        T.eq(s.scroll, max - 28, "a held D-pad repeats")
+        F.pad("down"); frames(app)
+        T.eq(s.scroll, max - 14)
+    end,
+
+    -- The browser demo binds Z to A and X to B: here they type.
+    bound_letters_type = function()
+        local F, app, s = setup()
+        F.binds[F.pc.gamepad.PAD_A] = { "Z", "F4" }
+        F.binds[F.pc.gamepad.PAD_B] = { "X", "F5" }
+        F.type("zx"); frames(app)
+        T.eq(app.screenName, "chat")
+        T.eq(s.ta:getText(), "zx")
+        F.key("f4"); frames(app)
+        T.eq(app.screenName, "picker", "F4 still opens it")
+    end,
+
+    -- On the device a typed key's events and its pad edge arrive in one
+    -- frame with isKeyDown already false: only pad:saw (App:step) drops it.
+    bound_letters_type_when_the_key_is_up = function()
+        local F, app, s = setup()
+        F.keysUpByRead = true
+        F.binds[F.pc.gamepad.PAD_A] = { "Z", "F4" }
+        F.binds[F.pc.gamepad.PAD_B] = { "X", "F5" }
+        F.type("zx"); frames(app)
+        T.eq(app.screenName, "chat")
+        T.eq(s.ta:getText(), "zx")
+    end,
+
+    hints_follow_the_bindings = function()
+        local F, app = setup({ seed = function(st)
+            assert(st:saveChat({ v = 1, id = "p1", title = "Dice", created = 1, updated = 1, items = {
+                { role = "user", text = "dice" },
+                { role = "assistant", provider = "anthropic", text = "```lua\n-- dice.lua\nprint(1)\n```",
+                  programs = { "dice.lua" } } } }))
+        end })
+        F.binds[F.pc.gamepad.PAD_START] = { "Z" }
+        F.binds[F.pc.gamepad.PAD_A] = { "F1" }
+        app.dirty = true; frames(app) -- the system menu's Controls page closing
+        T.ok(not has(F, "Recent chats"), "Z types here: no hint")
+        T.ok(has(F, "F1") and has(F, "Model"), F.screenText())
+        app:go("chat", { open = "p1" })
+        frames(app, 2)
+        T.ok(has(F, "[F] F3 run  Enter send"), F.screenText())
+        T.ok(has(F, "F3\nRun\nsaved as dice.lua"), "the card's cap")
+        F.binds[F.pc.gamepad.PAD_R] = { "Tab" }
+        F.binds[F.pc.gamepad.PAD_SELECT] = {}
+        app.dirty = true; frames(app)
+        T.ok(has(F, "[F] Tab run  Enter send"), F.screenText())
+        T.ok(has(F, "Tab\nRun\nsaved as dice.lua"), F.screenText())
+    end,
+
+    -- Review Focus 1: keys come before the pad in a frame, so what was typed
+    -- is in the box (and the draft) before Start leaves it.
+    typed_text_survives_a_pad_command = function()
+        local F, app = setup()
+        F.type("hi"); F.pad("start"); frames(app)
+        T.eq(app.screenName, "lists")
+        T.eq(app.store:prefs().drafts.new, "hi")
+    end,
+
+    -- Review Focus 2: Enter bound to A sends; A does not also open the picker.
+    enter_bound_to_a_still_sends = function()
+        local F, app = setup()
+        F.binds[F.pc.gamepad.PAD_A] = { "Enter", "F4" }
+        sendText(F, app, "hi")
+        T.eq(app.screenName, "chat")
+        T.eq(#F.requests, 1)
+    end,
+
+    enter_bound_to_a_still_sends_when_the_key_is_up = function()
+        local F, app = setup()
+        F.keysUpByRead = true
+        F.binds[F.pc.gamepad.PAD_A] = { "Enter", "F4" }
+        sendText(F, app, "hi")
+        T.eq(app.screenName, "chat")
+        T.eq(#F.requests, 1)
+    end,
+
     function_keys = function()
         local F, app = setup()
         F.key("f1"); frames(app)

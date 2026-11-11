@@ -628,8 +628,8 @@ return {
         T.ok(n >= 3 and n <= 4, n)
     end,
 
-    -- The Esc that ends a program does not also act in the chat, nor does a
-    -- key queued with the F3 that started it.
+    -- The Esc that ends a program does not also act in the chat. (F3 is the
+    -- pad's R, read after the frame's key events: no key is queued after it.)
     input_drained = function()
         local F, app = setup({ programs = { ["dice.lua"] = "-- dice.lua\npicocalc.sys.sleep(1)\n" } })
         openC1(F, app)
@@ -644,10 +644,6 @@ return {
         press(F, app, "f3")
         T.eq(pushed, true, "the program ran")
         T.eq(app.running, true, "the Esc pressed during the run was dropped")
-        F.key("f3")
-        F.key("esc")
-        frames(app)
-        T.eq(app.running, true, "the Esc queued after F3 was dropped")
         T.ok(F.inputCleared >= 2)
     end,
 
@@ -734,6 +730,28 @@ return {
         T.eq(app.screenName, "chat")
         T.eq(#F.requests, 0, "nothing sent")
         T.eq(lastNote(app.chat), nil, "an error adds no note")
+    end,
+
+    error_screen_on_the_controller = function()
+        local F, app = setup({ programs = { ["boom.lua"] = BOOM } })
+        openC1(F, app)
+        F.pad("r"); frames(app)
+        T.eq(app.screenName, "programError")
+        F.pad("right"); frames(app)
+        T.ok(has(F, "[B*] Back to chat"))
+        F.pad("left"); frames(app)
+        local adds = F.menuAdds
+        F.pad("r"); frames(app)
+        T.eq(F.menuAdds, adds + 1, "R runs it again")
+        F.pad("b"); frames(app)
+        T.eq(app.screenName, "chat")
+        F.binds[F.pc.gamepad.PAD_R] = { "Tab" }
+        F.binds[F.pc.gamepad.PAD_SELECT] = {}
+        F.key("tab"); frames(app)
+        T.ok(has(F, "[F] Enter choose  Tab run again"), F.screenText())
+        F.key("f4"); frames(app)
+        T.eq(app.screenName, "chat", "F4 is A: Ask the model to fix")
+        T.eq(#F.requests, 1, "the fix was sent")
     end,
 
     -- Final review M8: when drawHeader returns nothing, the panel sits under
@@ -849,8 +867,8 @@ return {
         T.eq(app.screenName, "lists")
         T.ok(F.hasToast("dice.lua ended after 0 s"))
         T.eq(#app.chat.items, 0, "no note in an unrelated chat")
-        press(F, app, "f4")
-        T.eq(app.screenName, "lists", "F4 on an orphan stays")
+        press(F, app, "backspace")
+        T.eq(app.screenName, "lists", "Y (Backspace) on an orphan stays")
         T.ok(F.hasToast("Its chat was deleted"))
     end,
 

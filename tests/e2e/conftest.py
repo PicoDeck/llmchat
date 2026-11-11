@@ -43,16 +43,18 @@ KEYS = {"anthropic": "sk-ant-fake-key", "opencode": "sk-fake-opencode-key",
 
 @pytest.fixture
 def llmchat(tmp_path):
-    """start(model="anthropic/claude-opus-5-5", keys=True, prefs=None)
+    """start(model="anthropic/claude-opus-5-5", keys=True, prefs=None, rebind=None)
     -> (sim, api, data_dir).
 
     Stages the app on a fresh SD card and starts a FakeAPI. prefs.json sets
     `model` and points every <service>_base at the fake (`prefs` adds more
     keys); with keys, keys.txt holds fake keys for all four services (KEYS).
+    rebind is written as the app's gamepad.json (Settings > Controls, This game:
+    {"a": ["Z", "F4"], ...}).
     Launching is the test's job: sim.launch_app(APP)."""
     started = []
 
-    def start(model="anthropic/claude-opus-5-5", keys=True, prefs=None):
+    def start(model="anthropic/claude-opus-5-5", keys=True, prefs=None, rebind=None):
         api = FakeAPI().start()
         sd = tmp_path / f"sd{len(started)}"
         stage_app(sd / "apps" / APP)
@@ -60,6 +62,8 @@ def llmchat(tmp_path):
         data.mkdir(parents=True, exist_ok=True)
         (data / "prefs.json").write_text(json.dumps(
             {"model": model, **{f"{s}_base": api.url for s in SERVICES}, **(prefs or {})}))
+        if rebind:
+            (data / "gamepad.json").write_text(json.dumps(rebind))
         if keys:
             (data / "keys.txt").write_text("".join(f"{s}={KEYS[s]}\n" for s in SERVICES))
         sim = PicodeckSimulator(binary_path=os.environ.get("PICODECK_SIM_BINARY"),
