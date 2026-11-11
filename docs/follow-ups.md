@@ -60,4 +60,4 @@ Open items left when LLM Chat 2.0 was merged (2026-10-26). The build was reviewe
 - A binding changed in the system menu shows in the Recent chats, Settings and error-screen footers at their next redraw (the next key or button): they draw only on input.
 - A controller has no way to stop a reply (Esc only): the chat's B is Settings.
 - The picker's "no key" and "failed" rows are built at `S:rebuild`, so after a rebind from the system menu they show the old key name until the next rebuild.
-- Hints read only each button's primary key slot: a button bound only in its alternate slot shows as missing ("?") in hints. The same holds in every PicoDeck app using `getLabel(btn) or "?"`; a fix belongs in one place (for example the firmware's getLabel falling back to slot 1).
+- Two taps of one key inside one long frame now move once on the lists, picker and Settings: the edge-based `getNavPressed` gives one edge per poll. Only visible in long frames (device checklist row 17 saw ~150 ms frames during downloads).

@@ -3,7 +3,8 @@
 -- both a key event and a button press, so a screen with a focused text field
 -- passes its typing set: a press of a button whose bound key is in that set
 -- and is down (or was pressed this frame) is dropped, since that key types
--- instead. A controller's press, which no key makes, always counts.
+-- instead. A controller's press, which no key makes, counts unless one of its
+-- bound typing keys is held.
 local Pad = {}
 Pad.__index = Pad
 
