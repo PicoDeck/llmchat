@@ -293,6 +293,18 @@ return {
         T.eq(app.screenName, "picker", "F4 still opens it")
     end,
 
+    -- On the device a typed key's events and its pad edge arrive in one
+    -- frame with isKeyDown already false: only pad:saw (App:step) drops it.
+    bound_letters_type_when_the_key_is_up = function()
+        local F, app, s = setup()
+        F.keysUpByRead = true
+        F.binds[F.pc.gamepad.PAD_A] = { "Z", "F4" }
+        F.binds[F.pc.gamepad.PAD_B] = { "X", "F5" }
+        F.type("zx"); frames(app)
+        T.eq(app.screenName, "chat")
+        T.eq(s.ta:getText(), "zx")
+    end,
+
     hints_follow_the_bindings = function()
         local F, app = setup({ seed = function(st)
             assert(st:saveChat({ v = 1, id = "p1", title = "Dice", created = 1, updated = 1, items = {
@@ -328,6 +340,15 @@ return {
     -- Review Focus 2: Enter bound to A sends; A does not also open the picker.
     enter_bound_to_a_still_sends = function()
         local F, app = setup()
+        F.binds[F.pc.gamepad.PAD_A] = { "Enter", "F4" }
+        sendText(F, app, "hi")
+        T.eq(app.screenName, "chat")
+        T.eq(#F.requests, 1)
+    end,
+
+    enter_bound_to_a_still_sends_when_the_key_is_up = function()
+        local F, app = setup()
+        F.keysUpByRead = true
         F.binds[F.pc.gamepad.PAD_A] = { "Enter", "F4" }
         sendText(F, app, "hi")
         T.eq(app.screenName, "chat")
