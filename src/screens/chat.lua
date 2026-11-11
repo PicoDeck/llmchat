@@ -5,6 +5,7 @@ local Markdown = require("src.markdown")
 local Wrap = require("src.wrap")
 local Fold = require("src.fold")
 local Keys = require("src.keys")
+local Pad = require("src.pad")
 local Services = require("src.services")
 
 local S = {}
@@ -149,17 +150,17 @@ end
 -- ------------------------------------------------------------------ layout
 
 -- Rows for one stored item, cached while its text and the font stay as they were.
-function S:entryFor(it, spec)
+function S:entryFor(it, spec, run)
     local c = self.cache[it]
-    if c and c.spec == spec and c.programs == it.programs then return c end
-    local e = { spec = spec, programs = it.programs }
+    if c and c.spec == spec and c.programs == it.programs and c.run == run then return c end
+    local e = { spec = spec, programs = it.programs, run = run }
     if it.role == "user" then
         e.kind = "user"
         e.rows, e.w, e.h = Layout.user(it.text or "", spec, USER_MAXW)
     elseif it.role == "assistant" then
         e.kind = "assistant"
         e.provider = it.provider
-        e.rows, e.h = Layout.assistant(Markdown.parse(it.text or ""), spec, TEXT_W, it.programs)
+        e.rows, e.h = Layout.assistant(Markdown.parse(it.text or ""), spec, TEXT_W, it.programs, run)
         if #e.rows == 0 then e = nil end
     elseif it.kind == "model" then
         e.kind = "note"
@@ -255,8 +256,9 @@ end
 -- position in range.
 function S:layout()
     local chat, spec = self.chat, self.app.fonts
-    if self.layVer ~= chat.version or self.laySpec ~= spec then
-        self.layVer, self.laySpec = chat.version, spec
+    local run = self:keyOf(Pad.R) or "-"
+    if self.layVer ~= chat.version or self.laySpec ~= spec or self.layRun ~= run then
+        self.layVer, self.laySpec, self.layRun = chat.version, spec, run
         local entries, y = {}, PAD
         local function add(e)
             e.y = y
@@ -264,7 +266,7 @@ function S:layout()
             y = y + e.h + GAP
         end
         for _, it in ipairs(chat.items) do
-            local e = self:entryFor(it, spec)
+            local e = self:entryFor(it, spec, run)
             if e then add(e) end
         end
         if chat.live then add(self:liveEntry(spec)) end
@@ -329,20 +331,38 @@ function S:key(ev)
             dy = dy * ROW
         end
         self:scrollBy(dy)
-    elseif Is("F1") then
-        app:go("lists")
-    elseif Is("F2") then
-        self:newChat()
-    elseif Is("F3") then
-        local name = chat.state == "idle" and chat:lastProgram()
-        if name and app.runProgram then app:runProgram(name) end
-    elseif Is("F4") then
-        app:go("picker") -- at any time; a pick applies from the next message
-    elseif Is("F5") then
-        app:go("settings")
     else
         local btns, ch = Keys.toWidget(ev, input)
         if btns ~= 0 or ch then self.ta:handleInput(btns, ch) end
+    end
+end
+
+-- The key shown for pad button `b`: one the compose box does not type.
+function S:keyOf(b) return self.app.pad:label(b, Pad.TEXT) end
+
+-- The pad while the compose box has focus; a key the compose box reads never
+-- acts as its button (Pad drops it), so a typed letter bound to A stays a
+-- letter. Keys come first in a frame, so what was typed is already in the box.
+function S:pad(p)
+    local app, chat = self.app, self.chat
+    local rep = p:repeated(Pad.TEXT)
+    if rep & Pad.UP ~= 0 then
+        self:scrollBy(-ROW)
+    elseif rep & Pad.DOWN ~= 0 then
+        self:scrollBy(ROW)
+    end
+    local pressed = p:pressed(Pad.TEXT)
+    if pressed & Pad.START ~= 0 then
+        app:go("lists")
+    elseif pressed & Pad.L ~= 0 then
+        self:newChat()
+    elseif pressed & Pad.R ~= 0 then
+        local name = chat.state == "idle" and chat:lastProgram()
+        if name and app.runProgram then app:runProgram(name) end
+    elseif pressed & Pad.A ~= 0 then
+        app:go("picker") -- at any time; a pick applies from the next message
+    elseif pressed & Pad.B ~= 0 then
+        app:go("settings")
     end
 end
 
@@ -444,16 +464,19 @@ function S:drawIntro()
     local lx = (320 - w) // 2
     d.fillRect(lx, 134, 4, 4, th.bar[sid] or th.dim)
     d.drawText(lx + 8, 132, label, th.dim, false)
-    local keys = { { "F1", "Recent chats" }, { "F4", "Model" }, { "F5", "Settings" } }
-    local total = 0
-    for _, k in ipairs(keys) do total = total + 16 + 6 + #k[2] * 6 end
-    total = total + 12
+    local caps = {}
+    for _, c in ipairs({ { Pad.START, "Recent chats" }, { Pad.A, "Model" }, { Pad.B, "Settings" } }) do
+        local key = self:keyOf(c[1])
+        if key then caps[#caps + 1] = { key = key, text = c[2], w = #key * 6 + 4 } end
+    end
+    local total = 12
+    for _, c in ipairs(caps) do total = total + c.w + 6 + #c.text * 6 end
     local kx = (320 - total) // 2
-    for _, k in ipairs(keys) do
-        d.fillRect(kx, 168, 16, 12, th.cap)
-        d.drawText(kx + 2, 170, k[1], th.fg, false)
-        d.drawText(kx + 22, 170, k[2], th.fg, false)
-        kx = kx + 16 + 6 + #k[2] * 6 + 12
+    for _, c in ipairs(caps) do
+        d.fillRect(kx, 168, c.w, 12, th.cap)
+        d.drawText(kx + 2, 170, c.key, th.fg, false)
+        d.drawText(kx + c.w + 6, 170, c.text, th.fg, false)
+        kx = kx + c.w + 6 + #c.text * 6 + 12
     end
 end
 
@@ -475,8 +498,8 @@ function S:footer()
         left = "Enter send  Shift+Enter new line"
     elseif last and last.role == "note" and last.error and self.ta:getText() == "" then
         left = "Enter retry"
-    elseif chat:lastProgram() then
-        left = "F3 run  Enter send"
+    elseif chat:lastProgram() and self:keyOf(Pad.R) then
+        left = self:keyOf(Pad.R) .. " run  Enter send"
     elseif self.maxScroll > 0 then
         left = "Up/Down scroll  Enter send"
     else

@@ -628,8 +628,8 @@ return {
         T.ok(n >= 3 and n <= 4, n)
     end,
 
-    -- The Esc that ends a program does not also act in the chat, nor does a
-    -- key queued with the F3 that started it.
+    -- The Esc that ends a program does not also act in the chat. (F3 is the
+    -- pad's R, read after the frame's key events: no key is queued after it.)
     input_drained = function()
         local F, app = setup({ programs = { ["dice.lua"] = "-- dice.lua\npicocalc.sys.sleep(1)\n" } })
         openC1(F, app)
@@ -644,10 +644,6 @@ return {
         press(F, app, "f3")
         T.eq(pushed, true, "the program ran")
         T.eq(app.running, true, "the Esc pressed during the run was dropped")
-        F.key("f3")
-        F.key("esc")
-        frames(app)
-        T.eq(app.running, true, "the Esc queued after F3 was dropped")
         T.ok(F.inputCleared >= 2)
     end,
 

@@ -117,7 +117,9 @@ end
 
 -- blocks (markdown.parse) to rows, height. width: the text column (296);
 -- programs: saved program names, for a code panel's action row.
-function M.assistant(blocks, spec, width, programs)
+-- runKey: the key named on its cap (default "F3")
+function M.assistant(blocks, spec, width, programs, runKey)
+    runKey = runKey or "F3"
     local rows, y = {}, 0
     local code = spec.code
     local function add(row)
@@ -191,13 +193,13 @@ function M.assistant(blocks, spec, width, programs)
                 if #b.lines == 0 then add({ h = code.rowH, kind = "panel", px = LEFT, pw = width }) end
                 add({ h = PANEL_BOTTOM, kind = "panel-bottom", px = LEFT, pw = width })
                 if saved then
-                    local capW = measure("F3", spec.adv) + 8
+                    local capW = measure(runKey, spec.adv) + 8
                     local runX = LEFT + capW + 6
                     local savedX = runX + measure("Run", spec.adv) + 8
                     add({
                         h = spec.rowH + 2, kind = "action",
                         segs = {
-                            { x = LEFT, text = "F3", face = "regular", color = "title", cap = true, w = capW },
+                            { x = LEFT, text = runKey, face = "regular", color = "title", cap = true, w = capW },
                             { x = runX, text = "Run", face = "regular", color = "fg" },
                             { x = savedX, text = "saved as " .. saved, face = "regular", color = "dim" },
                         },

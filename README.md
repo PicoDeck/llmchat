@@ -30,19 +30,19 @@ Every command also works from a game controller, and follows **Settings → Cont
 
 **Chat**
 
-| Key | Action |
-|---|---|
-| typing, Left / Right, Backspace, Del | edit the compose box |
-| Enter | send. When the last line is an error and the box is empty, Enter retries |
-| Shift+Enter | new line in the compose box |
-| Up / Down | scroll the conversation a row (hold to repeat) |
-| Shift+Up / Shift+Down | scroll a page |
-| Esc | while a reply arrives: stop it. Otherwise quit (an unsent message is kept as a draft) |
-| F1 | Recent chats and programs |
-| F2 | new chat |
-| F3 | run the newest program in this chat (when one exists and no reply is arriving) |
-| F4 | pick a model (the next message goes to it, with the conversation so far; a dim "now `<model>`" line marks the switch) |
-| F5 | Settings |
+| Key | Pad | Action |
+|---|---|---|
+| typing, Left / Right, Backspace, Del | | edit the compose box |
+| Enter | | send. When the last line is an error and the box is empty, Enter retries |
+| Shift+Enter | | new line in the compose box |
+| Up / Down | Up / Down | scroll the conversation a row (hold to repeat) |
+| Shift+Up / Shift+Down | | scroll a page |
+| Esc | | while a reply arrives: stop it. Otherwise quit (an unsent message is kept as a draft) |
+| F1 | Start | Recent chats and programs |
+| F2 | L | new chat |
+| F3 | R | run the newest program in this chat (when one exists and no reply is arriving) |
+| F4 | A | pick a model (the next message goes to it, with the conversation so far; a dim "now `<model>`" line marks the switch) |
+| F5 | B | Settings |
 
 **Model picker** (F4)
 
