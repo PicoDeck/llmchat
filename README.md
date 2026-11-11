@@ -46,13 +46,14 @@ Every command also works from a game controller, and follows **Settings → Cont
 
 **Model picker** (F4)
 
-| Key | Action |
-|---|---|
-| typing, Left / Right, Backspace, Del | filter: every word you type must appear in the model's name (`ds flash`, `vercel gem`) |
-| Up / Down | move between models (hold to repeat); Shift for a page |
-| Enter | pick the model, or "Use `<id>`" for a whole id you typed, and go back to the chat |
-| Esc | clear the filter; when it's empty, go back without changing anything |
-| F2 | download the services' model lists again |
+| Key | Pad | Action |
+|---|---|---|
+| typing, Left / Right, Backspace, Del | | filter: every word you type must appear in the model's name (`ds flash`, `vercel gem`) |
+| Up / Down | Up / Down | move between models (hold to repeat); Shift for a page |
+| Enter, F4 | A | pick the model, or "Use `<id>`" for a whole id you typed, and go back to the chat |
+| Esc, F5 | B | clear the filter; when it's empty, go back without changing anything |
+| F2 | L | download the services' model lists again |
+| F1 | Start | Settings |
 
 **Recent chats and programs** (Left / Right switch between the Chats and Programs tabs)
 

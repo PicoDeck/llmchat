@@ -48,8 +48,9 @@ local function setup(opts)
 end
 
 local function press(F, app, ...)
-    for _, k in ipairs({ ... }) do F.key(k) end
-    app:frame()
+    local keys = { ... }
+    if #keys == 0 then app:frame() end
+    for _, k in ipairs(keys) do F.key(k); app:frame() end
 end
 
 local function typeText(F, app, s)
@@ -143,14 +144,60 @@ return {
         T.eq(app.store:prefs().model, "anthropic/claude-opus-5-5")
     end,
 
-    -- The no-key row says "add one in Settings (F5)": F5 goes there.
-    f5_opens_settings = function()
+    -- The no-key row says "add one in Settings (F1)": F1 (the pad's Start)
+    -- goes there; F5 is B, which backs out.
+    start_opens_settings = function()
         local F, app = setup()
         press(F, app, "f4")
-        T.ok(has(F, "No key yet: add one in Settings (F5)"))
-        press(F, app, "f5")
+        T.ok(has(F, "No key yet: add one in Settings (F1)"), F.screenText())
+        press(F, app, "f1")
         T.eq(app.screenName, "settings")
         T.eq(F.liveConns(), 0, "the list download was cancelled")
+        press(F, app, "esc", "f4")
+        T.eq(app.screenName, "picker")
+        press(F, app, "f5")
+        T.eq(app.screenName, "chat", "F5 is back")
+    end,
+
+    controller_picks = function()
+        local F, app = setup({ seed = function(st) saveList(st, "vercel") end })
+        press(F, app, "f4")
+        local s = app.screens.picker
+        local start = s.sel
+        F.pad("down"); frames(app)
+        T.ok(s.sel > start)
+        local id = selected(app).id
+        F.pad("a"); frames(app)
+        T.eq(app.screenName, "chat")
+        T.eq(app.store:prefs().model, id)
+    end,
+
+    -- The browser demo binds Z to A: z filters, Enter and F4 pick.
+    bound_letter_filters = function()
+        local F, app = setup()
+        F.binds[F.pc.gamepad.PAD_A] = { "Z", "F4" }
+        press(F, app, "f4")
+        typeText(F, app, "opuz")
+        T.eq(app.screenName, "picker")
+        T.eq(app.screens.picker.field:getText(), "opuz")
+        T.ok(has(F, "[F] Enter pick  Esc clear | "), F.screenText())
+        press(F, app, "backspace", "esc")
+        T.eq(app.screens.picker.field:getText(), "", "Esc clears")
+        press(F, app, "f4")
+        T.eq(app.screenName, "chat", "F4 picks")
+    end,
+
+    -- Review Focus 4: on the device Shift+Down is PgDn, a key with no BTN_*
+    -- bit, which the gamepad reads as Down: a page.
+    pgdn_pages = function()
+        local F, app = setup({ seed = function(st) saveList(st, "vercel") end })
+        press(F, app, "f4")
+        local s = app.screens.picker
+        local start = s.sel
+        F.events[#F.events + 1] = { type = "down", key = 0xD7, mods = F.pc.input.BTN_SHIFT, padKey = "Down" }
+        frames(app)
+        T.ok(s.sel - start >= 10, "a page down: " .. (s.sel - start))
+        T.eq(s.field:getText(), "")
     end,
 
     -- A list that arrives while you browse keeps you where you are, not on
@@ -214,7 +261,7 @@ return {
         press(F, app, "f4")
         T.same(gets(F), { "/v1/models" }, "only Vercel: keyed, no list yet")
         T.ok(has(F, "Getting the model list..."), F.screenText())
-        T.ok(has(F, "No key yet: add one in Settings (F5)"), "OpenCode and OpenRouter have no key")
+        T.ok(has(F, "No key yet: add one in Settings (F1)"), "OpenCode and OpenRouter have no key")
         for _ = 1, 20 do frames(app) end
         T.ok(not has(F, "Getting the model list..."))
         T.ok(has(F, "vercel/") and has(F, "gemini-3.8-flash"), F.screenText())

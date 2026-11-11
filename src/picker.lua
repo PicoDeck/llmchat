@@ -7,17 +7,26 @@
 --   groups = { {service, ids = {the service's own ids} | nil,
 --               state = "ok"|"nokey"|"getting"|"failed", err, age}, ... }
 --     (one per service, in Services.ORDER),
---   filter = the filter field's text }
+--   filter = the filter field's text,
+--   keys = { settings = key name|nil, refresh = key name|nil } (the keys the
+--     rows name; nil when the pad button has none) }
 -- rows: {kind="use", id} | {kind="group", label, right}
 --     | {kind="model", id, tag = "in use"|nil, hl = {a, b}|nil} | {kind="text", text}
 local Services = require("src.services")
 
 local M = {}
 
-M.NO_KEY = "No key yet: add one in Settings (F5)"
 M.GETTING = "Getting the model list..."
 
-function M.failed(err) return "Couldn't get the list: " .. tostring(err) .. ". F2 tries again." end
+-- `key`: the key that opens Settings, or nil.
+function M.noKey(key)
+    return "No key yet: add one in Settings" .. (key and (" (" .. key .. ")") or "")
+end
+
+-- `key`: the key that downloads the lists again, or nil.
+function M.failed(err, key)
+    return "Couldn't get the list: " .. tostring(err) .. "." .. (key and (" " .. key .. " tries again.") or "")
+end
 
 -- The filter's words, lower case.
 function M.words(filter)
@@ -48,8 +57,9 @@ function M.age(fetched, now)
     return days .. "d"
 end
 
-local STATE_TEXT = { nokey = function() return M.NO_KEY end, getting = function() return M.GETTING end,
-                     failed = function(g) return M.failed(g.err) end }
+local STATE_TEXT = { nokey = function(_, keys) return M.noKey(keys.settings) end,
+                     getting = function() return M.GETTING end,
+                     failed = function(g, keys) return M.failed(g.err, keys.refresh) end }
 
 -- Like match, for an id already lower-cased.
 local function matchLower(s, words)
@@ -150,7 +160,7 @@ function M.build(input, cache)
     group("Recent", prepared(cache, input.recent or {}, nil), "")
     for _, g in ipairs(input.groups or {}) do
         local p = g.state ~= "nokey" and g.ids and prepared(cache, g.ids, g.service .. "/") or nil
-        local text = STATE_TEXT[g.state] and STATE_TEXT[g.state](g)
+        local text = STATE_TEXT[g.state] and STATE_TEXT[g.state](g, input.keys or {})
         local right = ""
         if g.state ~= "nokey" and g.ids then
             right = (g.age and (g.age .. "  ") or "") .. #g.ids

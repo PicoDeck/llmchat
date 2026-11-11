@@ -83,10 +83,11 @@ return {
         inp.groups[2] = { service = "opencode", state = "nokey" }
         inp.groups[3] = { service = "openrouter", state = "getting" }
         inp.groups[4] = { service = "vercel", state = "failed", err = "No WiFi" }
+        inp.keys = { settings = "F1", refresh = "F2" }
         local rows, count = Picker.build(inp)
         local k = kinds(rows)
         T.same({ table.unpack(k, 9) }, {
-            "# OpenCode", "- No key yet: add one in Settings (F5)",
+            "# OpenCode", "- No key yet: add one in Settings (F1)",
             "# OpenRouter", "- Getting the model list...",
             "# Vercel", "- Couldn't get the list: No WiFi. F2 tries again.",
         })
@@ -95,6 +96,11 @@ return {
         inp.groups[4] = { service = "vercel", state = "failed", err = "HTTP 503", ids = { "a/b" }, age = "3d" }
         k = kinds((Picker.build(inp)))
         T.same({ table.unpack(k, 13) }, { "# Vercel | 3d  1", "- Couldn't get the list: HTTP 503. F2 tries again.", "vercel/a/b" })
+        -- a key bound to nothing is not named
+        inp.keys = {}
+        k = kinds((Picker.build(inp)))
+        T.eq(k[10], "- No key yet: add one in Settings")
+        T.eq(k[14], "- Couldn't get the list: HTTP 503.")
     end,
 
     filter_words = function()

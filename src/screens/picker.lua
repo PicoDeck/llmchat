@@ -1,9 +1,11 @@
 -- The model picker (gateways spec 5.1, mockups 09-11): a filter field, then
--- the models in groups (src/picker.lua makes the rows). Typing filters,
--- Up/Down move (Shift for a page), Enter picks and goes back to the chat,
--- Esc clears the filter or goes back, F2 downloads the lists again, F5
--- opens Settings (the no-key rows send you there).
+-- the models in groups (src/picker.lua makes the rows). Typing filters (the
+-- keyboard); the pad does the rest (getNavPressed less the filter's keys):
+-- Up/Down move (Shift for a page), A picks and goes back to the chat, B
+-- clears the filter or goes back, L downloads the lists again, Start opens
+-- Settings (the no-key rows send you there).
 -- Everything is drawn in 6x8.
+local Pad = require("src.pad")
 local Keys = require("src.keys")
 local Services = require("src.services")
 local Picker = require("src.picker")
@@ -79,6 +81,7 @@ function S:rebuild(keepId)
     self.rows, self.count = Picker.build({
         current = full, recent = self.app.store:prefs().recent,
         groups = self:groups(), filter = self.field:getText(),
+        keys = { settings = self:keyOf(Pad.START), refresh = self:keyOf(Pad.L) },
     }, self.cache)
     self.sel = (keepId and Picker.find(self.rows, keepId, self.sel)) or Picker.first(self.rows) or 1
     self:reveal()
@@ -146,10 +149,28 @@ function S:pick()
     app:go("chat")
 end
 
+-- The key name of pad button b, for the rows and the footer; nil when the
+-- filter needs it or nothing is bound.
+function S:keyOf(b) return self.app.pad:label(b, Pad.FILTER, true) end
+
+-- Typing only; the pad does the rest (S:pad).
 function S:key(ev)
-    local app, input = self.app, self.pc.input
-    local function is(name) return Keys.is(ev, input, name) end
-    if is("ESC") then
+    local input = self.pc.input
+    if ev.type == "down" then
+        for _, name in ipairs({ "UP", "DOWN", "ENTER", "ESC" }) do
+            if Keys.is(ev, input, name) then return end
+        end
+        -- PgUp/PgDn (Shift+Up/Down) have no BTN_* bit; the pad pages with them
+        if ev.key == 0xD6 or ev.key == 0xD7 then return end
+    end
+    local btns, ch = Keys.toWidget(ev, input)
+    if btns ~= 0 or ch then self.field:handleInput(btns, ch) end
+end
+
+function S:pad(p)
+    local app = self.app
+    local nav = p:nav(Pad.FILTER)
+    if nav & Pad.B ~= 0 then
         if self.field:getText() ~= "" then
             self.field:setText("")
             self.field.cursor = 0
@@ -157,25 +178,23 @@ function S:key(ev)
         else
             app:go("chat")
         end
-    elseif is("ENTER") then
-        self:pick()
-    elseif is("UP") or is("DOWN") then
-        self:move(is("UP") and -1 or 1, Keys.shift(ev, input))
-    elseif is("F2") then
+        return
+    end
+    if nav & Pad.START ~= 0 then
+        app:go("settings")
+        return
+    end
+    if nav & Pad.UP ~= 0 then self:move(-1, p:shift()) end
+    if nav & Pad.DOWN ~= 0 then self:move(1, p:shift()) end
+    if nav & Pad.L ~= 0 then
         local keys, ids = app.store:keys(), {}
         for _, id in ipairs(Services.ORDER) do
             if keys[id] then ids[#ids + 1] = id end
         end
         self.fetcher:start(ids)
         self:rebuild(self.rows[self.sel] and self.rows[self.sel].id)
-    elseif is("F5") then
-        app:go("settings")
-    elseif is("TAB") then
-        return -- no key uses Tab
-    else
-        local btns, ch = Keys.toWidget(ev, input)
-        if btns ~= 0 or ch then self.field:handleInput(btns, ch) end
     end
+    if nav & Pad.A ~= 0 then self:pick() end
 end
 
 function S:tick(now)
@@ -266,7 +285,8 @@ function S:draw()
         d.fillRect(SCROLL_X, y0 + (h - thumb) * (self.top - 1) // math.max(1, maxTop - 1), 2, thumb, th.dim)
     end
     local filtering = self.field:getText():find("%S") ~= nil
-    local left = filtering and "Enter pick  Esc clear" or "Enter pick  F2 refresh  Esc back"
+    local pick, back = { self:keyOf(Pad.A), "pick" }, { self:keyOf(Pad.B), filtering and "clear" or "back" }
+    local left = Pad.hint("  ", filtering and { pick, back } or { pick, { self:keyOf(Pad.L), "refresh" }, back })
     local right = filtering and (self.count .. " match") or (self.count .. " models")
     pc.ui.drawFooter(left, right)
     d.setFont(d.FONT_6X8)

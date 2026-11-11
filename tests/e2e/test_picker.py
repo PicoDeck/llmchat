@@ -22,7 +22,7 @@ def pick(sim, text):
     type_text(sim, text)
     time.sleep(0.4)
     m = mark(sim)
-    sim.keypress("\n")
+    sim.keypress("enter")  # a tap of the key (getNavPressed's A); "\n" is a char only
     wait(sim, r"\[app\] screen chat", m)
     time.sleep(0.3)
 
@@ -40,7 +40,7 @@ def test_pick_and_send(llmchat):
     time.sleep(0.4)
     shot(sim, "picker-filter.png")
     m = mark(sim)
-    sim.keypress("\n")
+    sim.keypress("enter")
     wait(sim, r"\[app\] screen chat", m)
     prefs = json.loads((data / "prefs.json").read_text())
     assert prefs["model"] == "vercel/google/gemini-3.8-flash"
