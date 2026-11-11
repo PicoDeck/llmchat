@@ -56,14 +56,14 @@ Every command also works from a game controller, and follows **Settings → Cont
 
 **Recent chats and programs** (Left / Right switch between the Chats and Programs tabs)
 
-| Key | Chats tab | Programs tab |
-|---|---|---|
-| Up / Down | move in the list | move in the list |
-| Enter | open the chat | run the program |
-| F2 | new chat | new chat (Chats tab only) |
-| F4 | | open the chat that made the program |
-| Del | delete the chat (asks first) | delete the program (asks first) |
-| Esc | back to the chat | back to the chat |
+| Key | Pad | Chats tab | Programs tab |
+|---|---|---|---|
+| Up / Down | Up / Down | move in the list | move in the list |
+| Enter, F4 | A | open the chat | run the program |
+| F2 | L | new chat | |
+| Backspace | Y | | open the chat that made the program |
+| Del | X | delete the chat (asks first) | delete the program (asks first) |
+| Esc, F5 | B | back to the chat | back to the chat |
 
 **Program stopped** (after a crash)
 

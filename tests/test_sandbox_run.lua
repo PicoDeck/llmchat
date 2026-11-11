@@ -849,8 +849,8 @@ return {
         T.eq(app.screenName, "lists")
         T.ok(F.hasToast("dice.lua ended after 0 s"))
         T.eq(#app.chat.items, 0, "no note in an unrelated chat")
-        press(F, app, "f4")
-        T.eq(app.screenName, "lists", "F4 on an orphan stays")
+        press(F, app, "backspace")
+        T.eq(app.screenName, "lists", "Y (Backspace) on an orphan stays")
         T.ok(F.hasToast("Its chat was deleted"))
     end,
 

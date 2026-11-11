@@ -125,7 +125,7 @@ def test_old_claude_chat(llmchat):
     wait(sim, r"\[app\] screen lists", m)
     time.sleep(0.3)
     m = mark(sim)
-    sim.keypress("\n")
+    sim.keypress("enter")
     wait(sim, r"\[app\] screen chat", m)
     time.sleep(0.3)
     send(sim, "c")

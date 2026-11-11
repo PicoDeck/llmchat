@@ -91,7 +91,7 @@ return {
         T.ok(s:find("Fix my regex", 1, true))
         T.ok(s:find("OpenAI  6 messages  1 program", 1, true), s)
         T.ok(s:find("[T*] Chats", 1, true))
-        T.ok(s:find("Enter open", 1, true))
+        T.ok(s:find("[F] Enter open   F2 new   Del delete | ", 1, true), s)
         T.ok(not s:find("No chats yet", 1, true))
     end,
     -- Gateways spec 5.3: the service's label and colour; old rows keep
@@ -167,7 +167,7 @@ return {
         local s = F.screenText()
         T.ok(s:find("[T*] Programs", 1, true), s)
         T.ok(s:find("No programs yet", 1, true))
-        T.ok(s:find("F4 open its chat", 1, true))
+        T.ok(s:find("Bksp open its chat", 1, true), s)
         F.key("left"); app:frame()
         T.ok(F.screenText():find("[T*] Chats", 1, true))
         F.key("left"); app:frame()
@@ -209,8 +209,7 @@ return {
             for i = 1, 12 do st:saveChat(chatRow("c" .. i, "Chat " .. i, "claude", 2, i * 60 + 100000, F)) end
         end })
         open(F, app)
-        for _ = 1, 11 do F.key("down") end
-        app:frame()
+        for _ = 1, 11 do F.key("down"); app:frame() end
         local s = F.screenText()
         T.ok(s:find("Chat 12", 1, true), s)
         T.ok(not s:find("Chat 1\n", 1, true))
@@ -267,15 +266,70 @@ return {
         F.key("del"); app:frame()
         T.eq(deleted, "dice.lua")
     end,
-    programs_f4_opens_the_chat = function()
+    -- F4 is the pad's A (Enter's action): it runs; Y (Backspace) opens the chat.
+    programs_y_opens_the_chat = function()
         local F, app = setup({ seed = two })
+        local ran
         app.programs = {
             list = function() return { { name = "dice.lua", chat = "Cups", chatId = "a1", size = 10, updated = F.epoch } } end,
         }
+        app.runProgram = function(_, name) ran = name end
         open(F, app, { tab = 2 })
         F.key("f4"); app:frame()
+        T.eq(ran, "dice.lua", "F4 runs")
+        F.key("backspace"); app:frame()
         T.eq(app.screenName, "chat")
         T.eq(app.chat.id, "a1")
+    end,
+    controller_drives_the_lists = function()
+        local F, app = setup({ seed = two })
+        open(F, app)
+        F.pad("down"); app:frame()
+        F.pad("a"); app:frame()
+        T.eq(app.chat.id, "b2")
+        open(F, app)
+        F.confirms = { true }
+        F.pad("x"); app:frame() -- b2 is still selected
+        T.eq(F.lastConfirm, "Delete this chat? Its programs are kept.")
+        T.eq(#app.store:chats(), 1)
+        F.pad("right"); app:frame()
+        T.ok(F.screenText():find("[T*] Programs", 1, true))
+        F.pad("b"); app:frame()
+        T.eq(app.screenName, "chat")
+    end,
+    -- Review Focus 3: a controller's D-pad held down repeats.
+    held_dpad_repeats = function()
+        local F, app = setup({ seed = function(st, F)
+            for i = 1, 5 do st:saveChat(chatRow("c" .. i, "Chat " .. i, "claude", 2, i * 60, F)) end
+        end })
+        open(F, app)
+        local s = app.screens.lists
+        F.pad("down"); app:frame()
+        for _ = 1, 3 do F.padRepeat("down"); app:frame() end
+        T.eq(s.sel[1], 5)
+    end,
+    f5_is_back_too = function()
+        local F, app = setup()
+        open(F, app)
+        F.key("f5"); app:frame()
+        T.eq(app.screenName, "chat")
+    end,
+    -- Rebound in Settings > Controls: the keys move, and so do the hints.
+    follows_a_rebinding = function()
+        local F, app = setup({ seed = two })
+        F.binds[F.pc.gamepad.PAD_X] = { "D" }
+        F.binds[F.pc.gamepad.PAD_L] = {}
+        F.binds[F.pc.gamepad.PAD_SELECT] = { "Tab", "Enter" }
+        open(F, app)
+        local s = F.screenText()
+        T.ok(s:find("[F] F4 open   D delete | ", 1, true), s)
+        F.key("enter"); app:frame()
+        T.eq(app.screenName, "lists", "Enter is Select's now")
+        F.confirms = { true }
+        F.type("d"); app:frame()
+        T.eq(#app.store:chats(), 1, "D deletes")
+        F.key("del"); app:frame()
+        T.eq(#app.store:chats(), 1, "Del deletes nothing")
     end,
     open_another_chat_while_a_reply_arrives = function()
         local F, app = setup({ seed = two })
@@ -306,7 +360,7 @@ return {
         keptAndStopped(F)
     end,
 
-    programs_f4_while_a_reply_arrives = function()
+    programs_y_while_a_reply_arrives = function()
         local F, app = setup({ seed = two })
         app:go("chat", { new = true })
         app:frame()
@@ -315,7 +369,7 @@ return {
         app.programs.list = function() return { { name = "dice.lua", chat = "Cups", chatId = "a1", size = 10, updated = F.epoch } } end
         F.key("f1"); app:frame()
         F.key("right"); app:frame()
-        F.key("f4"); app:frame()
+        F.key("backspace"); app:frame()
         app.programs.list = list
         T.eq(app.chat.id, "a1")
         keptAndStopped(F)

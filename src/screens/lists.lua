@@ -4,9 +4,14 @@
 -- The Programs tab reads app.programs (Task 13): list() -> rows
 --   { name, chat = <chat title or nil>, chatId = <id or nil>, size = <bytes>,
 --     updated = <epoch> }, newest first; delete(name) -> true; and
--- app:runProgram(name, {chatId} | {orphan = true}) for Enter (Task 15).
+-- app:runProgram(name, {chatId} | {orphan = true}) for A (Task 15).
 -- Missing pieces are skipped quietly.
-local Keys = require("src.keys")
+--
+-- Everything comes from the pad (getNavPressed): the D-pad moves and switches
+-- tabs, A opens the chat / runs the program, B goes back, L starts a new chat
+-- (Chats tab), Y opens a program's chat, X deletes. The keys that are bound
+-- to those buttons (Enter, Esc, F2, F4, F5, Backspace, Del) arrive the same way.
+local Pad = require("src.pad")
 local Age = require("src.age")
 local Services = require("src.services")
 
@@ -16,10 +21,6 @@ S.__index = S
 local ROW_H = 32
 local LIST_BOT = 304
 local TABS = { "Chats", "Programs" }
-local FOOTERS = {
-    "Enter open   F2 new   Del delete",
-    "Enter run   F4 open its chat   Del delete",
-}
 
 function S.new(app)
     return setmetatable({
@@ -100,46 +101,60 @@ function S:deleteProgram(row)
     self:load()
 end
 
-function S:key(ev)
-    local app, input = self.app, self.pc.input
-    local function is(name) return Keys.is(ev, input, name) end
-    local row = self:current()
-    if is("ESC") then
+function S:pad(p)
+    local app = self.app
+    local nav = p:nav()
+    if nav & Pad.B ~= 0 then
         app:go("chat")
-    elseif is("LEFT") then
-        self.tab = 1
-    elseif is("RIGHT") then
-        self.tab = 2
-    elseif is("UP") then
-        self.sel[self.tab] = math.max(1, self.sel[self.tab] - 1)
-    elseif is("DOWN") then
-        self.sel[self.tab] = math.max(1, math.min(#self.rows[self.tab], self.sel[self.tab] + 1))
-    elseif is("F2") and self.tab == 1 then
-        app:go("chat", { new = true })
-    elseif not row then
         return
-    elseif self.tab == 1 then
-        if is("ENTER") then
+    end
+    if nav & Pad.LEFT ~= 0 then self.tab = 1 end
+    if nav & Pad.RIGHT ~= 0 then self.tab = 2 end
+    if nav & Pad.UP ~= 0 then
+        self.sel[self.tab] = math.max(1, self.sel[self.tab] - 1)
+    end
+    if nav & Pad.DOWN ~= 0 then
+        self.sel[self.tab] = math.max(1, math.min(#self.rows[self.tab], self.sel[self.tab] + 1))
+    end
+    if nav & Pad.L ~= 0 and self.tab == 1 then
+        app:go("chat", { new = true })
+        return
+    end
+    -- after the moves, so a Down and an A in one frame act on the row below
+    local row = self:current()
+    if not row then return end
+    if self.tab == 1 then
+        if nav & Pad.A ~= 0 then
             app:go("chat", { open = row.id })
-        elseif is("DEL") then
+        elseif nav & Pad.X ~= 0 then
             self:deleteChat(row)
         end
     else
-        if is("ENTER") then
+        if nav & Pad.A ~= 0 then
             -- in its chat, opened first (spec 9.6); an orphan runs on its own
             if app.runProgram then
                 app:runProgram(row.name, row.chatId and { chatId = row.chatId } or { orphan = true })
             end
-        elseif is("F4") then
+        elseif nav & Pad.Y ~= 0 then
             if row.chatId then
                 app:go("chat", { open = row.chatId })
             else
                 app.pc.ui.toast("Its chat was deleted")
             end
-        elseif is("DEL") then
+        elseif nav & Pad.X ~= 0 then
             self:deleteProgram(row)
         end
     end
+end
+
+function S:footer()
+    local p = self.app.pad
+    if self.tab == 1 then
+        return Pad.hint("   ", { { p:label(Pad.A, nil, true), "open" }, { p:label(Pad.L), "new" },
+                                 { p:label(Pad.X), "delete" } })
+    end
+    return Pad.hint("   ", { { p:label(Pad.A, nil, true), "run" }, { p:label(Pad.Y), "open its chat" },
+                             { p:label(Pad.X), "delete" } })
 end
 
 function S:tick() return false end
@@ -200,7 +215,7 @@ function S:draw()
         end
     end
     d.setFont(d.FONT_6X8)
-    pc.ui.drawFooter(FOOTERS[self.tab])
+    pc.ui.drawFooter(self:footer())
 end
 
 return S
