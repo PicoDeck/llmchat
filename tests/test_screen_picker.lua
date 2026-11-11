@@ -144,6 +144,20 @@ return {
         T.eq(app.store:prefs().model, "anthropic/claude-opus-5-5")
     end,
 
+    -- F1-F5 are never read as keys: Ctrl+F1 is the pad's Start (Settings),
+    -- and must not also move the filter's cursor to Home.
+    ctrl_f1_does_not_edit_the_filter = function()
+        local F, app = setup()
+        press(F, app, "f4")
+        typeText(F, app, "abc")
+        local field = app.screens.picker.field
+        T.eq(field.cursor, 3)
+        F.key("f1", F.pc.input.BTN_CTRL); app:frame()
+        T.eq(app.screenName, "settings")
+        T.eq(field:getText(), "abc")
+        T.eq(field.cursor, 3, "Home was not applied")
+    end,
+
     -- The no-key row says "add one in Settings (F1)": F1 (the pad's Start)
     -- goes there; F5 is B, which backs out.
     start_opens_settings = function()

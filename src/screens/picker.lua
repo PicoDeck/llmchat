@@ -160,6 +160,11 @@ function S:key(ev)
         for _, name in ipairs({ "UP", "DOWN", "ENTER", "ESC" }) do
             if Keys.is(ev, input, name) then return end
         end
+        -- F1-F5 and Tab are never keys (only the pad buttons they are bound
+        -- to): Ctrl+F1/F2 would otherwise move the field's cursor as well
+        for _, name in ipairs({ "F1", "F2", "F3", "F4", "F5", "TAB" }) do
+            if Keys.is(ev, input, name) then return end
+        end
         -- PgUp/PgDn (Shift+Up/Down) have no BTN_* bit; the pad pages with them
         if ev.key == 0xD6 or ev.key == 0xD7 then return end
     end
