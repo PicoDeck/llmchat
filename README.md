@@ -76,11 +76,11 @@ Every command also works from a game controller, and follows **Settings → Cont
 
 **Settings**
 
-| Key | Action |
-|---|---|
-| Up / Down | move between rows |
-| Enter | change the row, or edit a key or the instructions (an empty key removes it) |
-| Esc | while editing: cancel (instructions: done); otherwise save and go back |
+| Key | Pad | Action |
+|---|---|---|
+| Up / Down | Up / Down | move between rows |
+| Enter, F4 | A | change the row, or edit a key or the instructions (an empty key removes it) |
+| Esc, F5 | B | while editing: cancel (instructions: done); otherwise save and go back |
 
 ## Programs
 Ask for one in plain words: "write a dice roller", "a program that shows a clock". The model answers with a Lua program in a code block, headed by a comment that names the file, such as `-- dice.lua`. The system prompt teaches it the PicoDeck API.

@@ -22,15 +22,21 @@ local function setup(opts)
     return F, app, app.screens.settings
 end
 
+-- One frame per key, as a person presses them (the pad reads one mask a frame).
 local function press(F, app, ...)
-    for _, k in ipairs({ ... }) do F.key(k) end
-    app:frame()
+    local keys = { ... }
+    if #keys == 0 then app:frame() end
+    for _, k in ipairs(keys) do F.key(k); app:frame() end
 end
 
--- Focus row n (1 Anthropic .. 4 Vercel, 5 Thinking .. 7 Instructions).
+-- Focus row n (1 Anthropic .. 4 Vercel, 5 Thinking .. 7 Instructions);
+-- bounded: a key that doesn't move the focus fails, not hangs.
 local function focus(F, app, s, n)
-    while s.focus < n do press(F, app, "down") end
-    while s.focus > n do press(F, app, "up") end
+    for _ = 1, 8 do
+        if s.focus == n then return end
+        press(F, app, s.focus < n and "down" or "up")
+    end
+    T.eq(s.focus, n, "focus")
 end
 
 return {
@@ -262,6 +268,59 @@ return {
         press(F, app, "enter", "esc")
         T.eq(app.screenName, "settings")
         T.ok(not s.thinking:isExpanded())
+    end,
+    controller_changes_and_backs_out = function()
+        local F, app, s = setup()
+        for _ = 1, 4 do F.pad("down"); app:frame() end
+        T.eq(s.focus, 5)
+        F.pad("a"); app:frame()
+        T.ok(s.thinking:isExpanded())
+        F.pad("down"); app:frame()
+        F.pad("a"); app:frame()
+        T.eq(app.store:prefs().thinking, "medium")
+        F.pad("b"); app:frame()
+        T.eq(app.screenName, "chat")
+        T.eq(Store.new(F.pc.fs, F.pc.json, D):prefs().thinking, "medium", "saved")
+    end,
+    -- A controller can't type: B (F5) gets it out of an edit, as Esc does.
+    b_ends_an_edit = function()
+        local F, app, s = setup()
+        F.pad("a"); app:frame()
+        T.ok(s.field, "editing")
+        F.type("zzz"); app:frame()
+        F.pad("b"); app:frame()
+        T.eq(s.field, nil)
+        T.eq(app.screenName, "settings")
+        T.eq(app.store:keys().anthropic, CLAUDE_KEY, "cancelled")
+        focus(F, app, s, 7)
+        press(F, app, "enter")
+        F.type(" Hi."); press(F, app, "f5")
+        T.ok(not s.editInstr)
+        T.ok(app.store:prefs().instructions:find("Hi.", 1, true), "kept")
+    end,
+    -- The browser demo binds X to B: x types into a key; the Enter that
+    -- saves it is also getNavPressed's A, which must not open it again.
+    bound_letter_types_in_a_key = function()
+        local F, app, s = setup({ key = false })
+        F.binds[F.pc.gamepad.PAD_B] = { "X", "F5" }
+        press(F, app, "enter")
+        F.type("x1"); app:frame()
+        T.ok(s.field, "x did not end the edit")
+        press(F, app, "enter")
+        T.eq(app.store:keys().anthropic, "x1")
+        T.eq(s.field, nil, "Enter saved it and did not open it again")
+        T.eq(app.screenName, "settings")
+    end,
+    -- Review Focus 5: B with a dropdown open closes it, not Settings.
+    b_closes_an_open_select_first = function()
+        local F, app, s = setup()
+        focus(F, app, s, 6)
+        F.pad("a"); app:frame()
+        T.ok(s.font:isExpanded())
+        F.pad("b"); app:frame()
+        T.eq(app.screenName, "settings")
+        T.ok(not s.font:isExpanded())
+        T.eq(app.store:prefs().font, "sans", "unchanged")
     end,
     chrome_font_is_restored = function()
         local F = setup()
