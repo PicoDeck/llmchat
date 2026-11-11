@@ -732,6 +732,28 @@ return {
         T.eq(lastNote(app.chat), nil, "an error adds no note")
     end,
 
+    error_screen_on_the_controller = function()
+        local F, app = setup({ programs = { ["boom.lua"] = BOOM } })
+        openC1(F, app)
+        F.pad("r"); frames(app)
+        T.eq(app.screenName, "programError")
+        F.pad("right"); frames(app)
+        T.ok(has(F, "[B*] Back to chat"))
+        F.pad("left"); frames(app)
+        local adds = F.menuAdds
+        F.pad("r"); frames(app)
+        T.eq(F.menuAdds, adds + 1, "R runs it again")
+        F.pad("b"); frames(app)
+        T.eq(app.screenName, "chat")
+        F.binds[F.pc.gamepad.PAD_R] = { "Tab" }
+        F.binds[F.pc.gamepad.PAD_SELECT] = {}
+        F.key("tab"); frames(app)
+        T.ok(has(F, "[F] Enter choose  Tab run again"), F.screenText())
+        F.key("f4"); frames(app)
+        T.eq(app.screenName, "chat", "F4 is A: Ask the model to fix")
+        T.eq(#F.requests, 1, "the fix was sent")
+    end,
+
     -- Final review M8: when drawHeader returns nothing, the panel sits under
     -- the 29 px header every other screen assumes (it used to take 21).
     error_screen_header_fallback = function()

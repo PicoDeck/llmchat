@@ -68,12 +68,12 @@ Every command also works from a game controller, and follows **Settings → Cont
 
 **Program stopped** (after a crash)
 
-| Key | Action |
-|---|---|
-| Left / Right | move between "Ask the model to fix" and "Back to chat" |
-| Enter | choose the button |
-| F3 | run the program again |
-| Esc | back to the chat |
+| Key | Pad | Action |
+|---|---|---|
+| Left / Right | Left / Right | move between "Ask the model to fix" and "Back to chat" |
+| Enter, F4 | A | choose the button |
+| F3 | R | run the program again |
+| Esc, F5 | B | back to the chat |
 
 **Settings**
 
