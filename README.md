@@ -8,7 +8,7 @@ Chat with Claude, and with the models on OpenCode, OpenRouter and Vercel AI Gate
 - A model's Lua program is saved on the card and runs from F3 or the Programs tab. If it crashes, one key asks the model to fix it.
 
 ## Set up
-1. Install LLM Chat from the PicoDeck App Store. The device needs WiFi.
+1. Install LLM Chat from the PicoDeck App Store. The device needs WiFi and PicoDeck 0.7.0 or later.
 2. Give it an API key for one or more of the services: Anthropic (Claude), [OpenCode](https://opencode.ai), [OpenRouter](https://openrouter.ai) and [Vercel AI Gateway](https://vercel.com/ai-gateway). Either:
    - open Settings (F5), move to the service's row under **API keys** and press Enter to type or paste the key; or
    - put the keys in a file `keys.txt` in the app's data folder, `/data/net.picodeck.llmchat/`, from a computer over USB or with the Text Editor app. One key per line, `#` starts a comment:
@@ -26,6 +26,8 @@ Chat with Claude, and with the models on OpenCode, OpenRouter and Vercel AI Gate
 Keys are shown masked in Settings, and each one is only ever sent to its own service's server.
 
 ## Keys
+Every command also works from a game controller, and follows **Settings → Controls** in the system menu: F1-F5 and Tab act as the gamepad buttons they are bound to (by default Start, L, R, A and B; Tab is Select), and so do the arrows, Enter, Esc, Del and Backspace everywhere but where you type. The Pad column below names the button. Where you type (the compose box, the picker's filter, a key or the instructions in Settings) the keyboard types: a key there never also acts as the button it is bound to, and writing a message needs a keyboard. With only a controller you can still read and open chats, pick a model, change Settings and run programs; Home opens the system menu, where **Exit App** quits.
+
 **Chat**
 
 | Key | Action |

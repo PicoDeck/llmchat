@@ -11,6 +11,14 @@ local BTN = {
     F1 = 128, F2 = 256, F3 = 512, F4 = 1024, F5 = 2048, F6 = 4096, F7 = 8192, F8 = 16384, F9 = 32768,
     BACKSPACE = 65536, TAB = 131072, DEL = 262144, SHIFT = 524288, CTRL = 1048576, ALT = 2097152, FN = 4194304,
 }
+-- The getLabel names of the keys F.key presses.
+local KEYNAME = {
+    up = "Up", down = "Down", left = "Left", right = "Right", enter = "Enter", esc = "Esc",
+    backspace = "Bksp", tab = "Tab", del = "Del", f1 = "F1", f2 = "F2", f3 = "F3", f4 = "F4", f5 = "F5",
+}
+-- PicoDeck's PAD_* values (src/os/os.h).
+local PAD = { UP = 1, DOWN = 2, LEFT = 4, RIGHT = 8, A = 16, B = 32, X = 64, Y = 128,
+              L = 256, R = 512, START = 1024, SELECT = 2048 }
 local KEYCODE = {
     up = 0xB5, down = 0xB6, left = 0xB4, right = 0xB7, enter = 0x0A, esc = 0xB1, backspace = 0x08,
     tab = 0x09, del = 0xD4, f1 = 0x81, f2 = 0x82, f3 = 0x83, f4 = 0x84, f5 = 0x85,
@@ -290,14 +298,75 @@ function M.new()
         return v
     end
     function ui.toast(text) F.toasts[#F.toasts + 1] = text end
+    function ui.splash(title, sub) F.splash = { title, sub } end
 
     local input = {}
     for name, v in pairs(BTN) do input["BTN_" .. name] = v end
-    function input.update() F.service() end
+    -- The logical gamepad (firmware 0.7.0). F.binds[btn] = {primary,
+    -- alternate} key names, the firmware's defaults; a test rebinds by
+    -- assigning. Each input.update reads the keys queued since the last one
+    -- (F.key, F.type): each presses the button it is bound to; Enter and Esc
+    -- bound to none add A and B to getNavPressed only. F.pad(name, ...)
+    -- presses a controller's buttons (no key event) and F.padRepeat(name, ...)
+    -- adds repeat edges, both for the next update. For that frame
+    -- input.getButtons() holds the queued keys' buttons and modifiers, and
+    -- input.isKeyDown(code) is true for their codes and for F.held[code].
+    F.binds = { [1] = { "Up" }, [2] = { "Down" }, [4] = { "Left" }, [8] = { "Right" }, [16] = { "F4" },
+                [32] = { "F5" }, [64] = { "Del" }, [128] = { "Bksp" }, [256] = { "F2" }, [512] = { "F3" },
+                [1024] = { "F1" }, [2048] = { "Tab" } }
+    F.padNext, F.repNext, F.held = 0, 0, {}
+    F.padFrame = { pressed = 0, repeated = 0, nav = 0, held = 0, down = {} }
+    local function buttonOf(name)
+        for b, keys in pairs(F.binds) do
+            if keys[1] == name or keys[2] == name then return b end
+        end
+    end
+    function input.update()
+        local fr = { pressed = F.padNext, nav = 0, held = 0, down = {} }
+        for _, ev in ipairs(F.events) do
+            if not ev.padSeen then
+                ev.padSeen = true
+                local b = ev.padKey and buttonOf(ev.padKey)
+                if b then fr.pressed = fr.pressed | b
+                elseif ev.padKey == "Enter" then fr.nav = fr.nav | PAD.A
+                elseif ev.padKey == "Esc" then fr.nav = fr.nav | PAD.B end
+                if ev.key then fr.down[ev.key] = true end
+                if ev.type == "down" then fr.held = fr.held | (ev.button or 0) | (ev.mods or 0) end
+            end
+        end
+        fr.repeated = fr.pressed | F.repNext
+        fr.nav = fr.nav | fr.pressed | (F.repNext & (PAD.UP | PAD.DOWN | PAD.LEFT | PAD.RIGHT))
+        F.padNext, F.repNext, F.padFrame = 0, 0, fr
+        F.service()
+    end
+    function input.getButtons() return F.padFrame.held end
+    function input.isKeyDown(k) return F.padFrame.down[k] or F.held[k] or false end
+    local gamepad = {}
+    for name, v in pairs(PAD) do gamepad["PAD_" .. name] = v end
+    function gamepad.getButtons() return 0 end
+    function gamepad.getButtonsPressed() return F.padFrame.pressed end
+    function gamepad.getButtonsReleased() return 0 end
+    function gamepad.getButtonsRepeated() return F.padFrame.repeated end
+    function gamepad.getNavPressed() return F.padFrame.nav end
+    -- As the firmware: an error for anything but one PAD_* bit or slot 0/1.
+    function gamepad.getLabel(btn, slot)
+        slot = slot or 0
+        local keys = F.binds[btn]
+        if not keys or (slot ~= 0 and slot ~= 1) then error("bad argument to 'getLabel'") end
+        return keys[slot + 1]
+    end
+    local function padBits(names)
+        local m = 0
+        for _, n in ipairs(names) do m = m | assert(PAD[n:upper()], n) end
+        return m
+    end
+    function F.pad(...) F.padNext = F.padNext | padBits({ ... }) end
+    function F.padRepeat(...) F.repNext = F.repNext | padBits({ ... }) end
     function input.pollEvent() return table.remove(F.events, 1) end
     -- Drops the queued events, as the firmware does (F.inputCleared counts calls).
     function input.clearState()
         F.events = {}
+        F.padFrame = { pressed = 0, repeated = 0, nav = 0, held = 0, down = {} }
         F.inputCleared = F.inputCleared + 1
     end
     function input.setRepeat(delay, rate) F.repeatCfg = { delay, rate } end
@@ -409,17 +478,20 @@ function M.new()
     F.pc = {
         display = display, ui = ui, input = input, sys = sys, network = network,
         fs = fs, json = require("tests.json"), config = config,
+        gamepad = gamepad,
         appconfig = config, -- the firmware registers the one store under both names
     }
 
     function F.key(name, mods)
         local button = name:upper()
-        F.events[#F.events + 1] = { type = "down", key = KEYCODE[name], button = BTN[button], mods = mods or 0 }
+        F.events[#F.events + 1] = { type = "down", key = KEYCODE[name], button = BTN[button], mods = mods or 0,
+                                  padKey = KEYNAME[name] }
     end
     F.press = F.key
     function F.type(chars)
         for c in chars:gmatch(".") do
-            F.events[#F.events + 1] = { type = "char", key = c:byte(), char = c, mods = 0 }
+            F.events[#F.events + 1] = { type = "char", key = c:byte(), char = c, mods = 0,
+                                  padKey = c:match("%a") and c:upper() or (c == " " and "Space" or nil) }
         end
     end
     function F.screenText() return table.concat(F.texts, "\n") end
